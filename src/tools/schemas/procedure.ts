@@ -3,10 +3,15 @@
  *
  * Zod schemas for Komodo Procedure resources (`komodo_procedure_*` tools).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/procedure.ts) — `z`
+ * imported from `zod` directly rather than the reference's
+ * third-party framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/procedure
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { resourceNameSchema } from "./validators.js";
 import { actionResultSchema, pageOutputSchema, resourceLinkSchema } from "./shared.js";
 
@@ -115,12 +120,6 @@ export const procedureConfigSchema = z
   })
   .describe("Procedure configuration — only specify fields you want to set or update");
 
-/**
- * Discriminated input for `komodo_procedure_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Procedure (`name` required)
- * - `action: "update"` — PATCH-style update of an existing Procedure (`procedure` required)
- */
 /**
  * Input for `komodo_procedure_apply` (create-or-update).
  *

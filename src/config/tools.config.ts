@@ -3,6 +3,9 @@
  *
  * Default values and validation limits for MCP tools.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/config/tools.config.ts).
+ *
  * @module config/tools
  */
 

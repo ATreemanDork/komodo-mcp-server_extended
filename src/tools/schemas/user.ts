@@ -3,10 +3,15 @@
  *
  * Zod schemas for user-management tool outputs (API key listing/creation).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/user.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/user
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { pageOutputSchema } from "./shared.js";
 
 // ============================================================================

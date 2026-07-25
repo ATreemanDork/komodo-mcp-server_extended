@@ -3,21 +3,18 @@
  *
  * Zod schemas for container tool inputs — lifecycle actions, log fetching, search.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/container.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/container
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { PARAM_DESCRIPTIONS } from "../../config/index.js";
 import { serverIdSchema, containerNameSchema } from "./validators.js";
 import { resourceLinkSchema, pageOutputSchema } from "./shared.js";
-
-/** Identifies a container for lifecycle operations (start, stop, restart, pause, unpause) */
-export const containerActionSchema = z
-  .object({
-    server: serverIdSchema.describe(PARAM_DESCRIPTIONS.SERVER_ID_WHERE_CONTAINER_RUNS),
-    container: containerNameSchema.describe(PARAM_DESCRIPTIONS.CONTAINER_ID_FOR_ACTION),
-  })
-  .describe("Identifies a container for lifecycle operations (start, stop, restart, pause, unpause)");
 
 /** Container lifecycle actions for the consolidated `komodo_container_action` tool */
 export const containerActionEnum = z

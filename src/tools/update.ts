@@ -11,20 +11,35 @@
  * Note: ListUpdates uses **page-based** pagination on the Komodo backend (not cursor-based).
  * We expose `cursor` as an opaque string that encodes the next page number for API-shape consistency.
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/update.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference. This domain is read-only (no lifecycle
+ * action, no apply/delete) so it does not use `wrapExecuteAndPoll` /
+ * `buildActionResult` / `AppErrorFactory`.
+ *
  * @module tools/update
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
-import { requireClient, wrapApiCall, renderUpdateList, renderUpdateInfo, tryRegisterResource } from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { redactObject } from "../utils/redact.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { renderUpdateList, renderUpdateInfo } from "./renderers/update.js";
 import {
   updateIdSchema,
   updateListOutputSchema,
   updateInfoOutputSchema,
   updateListInputSchema,
-} from "./schemas/index.js";
-import { inlineFullInputSchema } from "./schemas/index.js";
+} from "./schemas/update.js";
+import { inlineFullInputSchema } from "./schemas/shared.js";
 
 type UpdateListItem = Types.UpdateListItem;
 type UpdateFull = Types.Update;
@@ -49,7 +64,7 @@ function projectFullSummary(u: UpdateFull) {
     status: u.status,
     success: u.success,
     start_ts: u.start_ts,
-    ...(u.end_ts !== undefined ? { end_ts: u.end_ts } : {}),
+    ...(u.end_ts ? { end_ts: u.end_ts } : {}),
     target_type: u.target.type,
     ...(u.target.id ? { target_id: u.target.id } : {}),
     ...(u.operator ? { username: u.operator } : {}),
@@ -69,7 +84,7 @@ export const listUpdatesTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.UPDATE },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
 
     // Decode opaque cursor → page number (Komodo's pagination model is integer page index).
@@ -85,13 +100,15 @@ export const listUpdatesTool = defineTool({
     if (args.target_type) query["target.type"] = args.target_type;
     if (args.target_id) query["target.id"] = args.target_id;
 
-    // @type-variance — Komodo SDK types `query` as `MongoDocument`; a plain record is accepted at runtime.
+    // `MongoDocument` is `any` in the Komodo SDK, so `query` (already
+    // `Record<string, unknown>`) needs no cast — casting to an `any` alias
+    // would trigger `no-unsafe-assignment`.
     const params: Types.ListUpdates = {
       ...(page !== undefined && { page }),
-      ...(Object.keys(query).length > 0 && { query: query as Types.MongoDocument }),
+      ...(Object.keys(query).length > 0 && { query }),
     };
 
-    const result = await wrapApiCall("listUpdates", () => komodo.client.read("ListUpdates", params), abortSignal);
+    const result = await wrapApiCall("listUpdates", () => komodo.client.read("ListUpdates", params));
 
     const allItems = result.updates.map(projectListItem);
     // Respect requested page_size by truncating; Komodo's server-side page size is fixed (~20).
@@ -101,9 +118,11 @@ export const listUpdatesTool = defineTool({
     const pageInfo = result.next_page !== undefined ? { next_cursor: String(result.next_page) } : undefined;
 
     const payload = { items, ...(pageInfo && { page: pageInfo }) };
-    return structured(payload, { text: renderUpdateList(payload) });
+    return structuredResult(payload, { text: renderUpdateList(payload) });
   },
 });
+
+registerToolDefinition(listUpdatesTool);
 
 // ============================================================================
 // Info
@@ -121,9 +140,9 @@ export const getUpdateInfoTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.UPDATE },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall("getUpdate", () => komodo.client.read("GetUpdate", { id: args.id }), abortSignal);
+    const result = redactObject(await wrapApiCall("getUpdate", () => komodo.client.read("GetUpdate", { id: args.id })));
     const summary = projectFullSummary(result);
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -136,9 +155,11 @@ export const getUpdateInfoTool = defineTool({
       description: `Full update payload with per-stage logs`,
     });
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderUpdateInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getUpdateInfoTool);

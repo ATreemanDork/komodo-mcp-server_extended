@@ -6,10 +6,15 @@
  * ResourceSync is Komodo's GitOps mechanism: a configured set of TOML files in
  * a git repo is reconciled against the running Komodo state.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/resource-sync.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/resource-sync
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { resourceNameSchema } from "./validators.js";
 import { actionResultSchema, pageOutputSchema, resourceLinkSchema } from "./shared.js";
 

@@ -10,39 +10,46 @@
  * - `komodo_stack_delete`   — remove stack from Komodo
  * - `komodo_stack_action`   — consolidated lifecycle (deploy/pull/start/restart/pause/unpause/stop/destroy)
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/stack.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/stack
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { destructiveWhenActionIn } from "../guardrails/policy.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { PARAM_DESCRIPTIONS, ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  paginate,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  renderStackList,
-  renderStackInfo,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { redactObject } from "../utils/redact.js";
+import { renderStackList, renderStackInfo } from "./renderers/stack.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   stackApplyInputSchema,
   stackActionInputSchema,
-  stackIdSchema,
   stackListOutputSchema,
   stackInfoOutputSchema,
+} from "./schemas/stack.js";
+import { stackIdSchema } from "./schemas/validators.js";
+import {
   actionResultSchema,
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type StackListItem = Types.StackListItem;
 
@@ -55,12 +62,12 @@ export const listStacksTool = defineTool({
   description: "List all Komodo-managed Compose stacks. Shows stack name, ID, and current state.",
   input: paginationInputSchema,
   output: stackListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.STACK },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const stacks = await wrapApiCall("list stacks", () => komodo.client.read("ListStacks", {}), abortSignal);
+    const stacks = await wrapApiCall("list stacks", () => komodo.client.read("ListStacks", {}));
     const allItems = stacks.map((s: StackListItem) => ({
       id: s.id,
       name: s.name,
@@ -69,9 +76,11 @@ export const listStacksTool = defineTool({
     }));
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderStackList(payload) });
+    return structuredResult(payload, { text: renderStackList(payload) });
   },
 });
+
+registerToolDefinition(listStacksTool);
 
 // ============================================================================
 // Info / CRUD
@@ -87,15 +96,13 @@ export const getStackInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: stackInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.STACK },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getStackInfo",
-      () => komodo.client.read("GetStack", { stack: args.stack }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getStackInfo", () => komodo.client.read("GetStack", { stack: args.stack })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -109,12 +116,14 @@ export const getStackInfoTool = defineTool({
     });
     const summary = { id: args.stack, name: args.stack };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderStackInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getStackInfoTool);
 
 export const applyStackTool = defineTool({
   name: "komodo_stack_apply",
@@ -129,20 +138,18 @@ export const applyStackTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.STACK },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
       const name = args.name;
       const stackConfig: Record<string, unknown> = { ...args.config };
       if (args.server_id) stackConfig.server_id = args.server_id;
-      const result = await wrapApiCall(
-        "createStack",
-        () => komodo.client.write("CreateStack", { name, config: stackConfig }),
-        abortSignal,
+      const result = await wrapApiCall("createStack", () =>
+        komodo.client.write("CreateStack", { name, config: stackConfig }),
       );
       const built = buildApplyResult("create", "stack", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.stack) throw AppErrorFactory.validation.fieldRequired("stack");
     const stackId = args.stack;
@@ -154,12 +161,13 @@ export const applyStackTool = defineTool({
           id: stackId,
           config: args.config as Types._PartialStackConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "stack", stackId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyStackTool);
 
 export const deleteStackTool = defineTool({
   name: "komodo_stack_delete",
@@ -170,19 +178,18 @@ export const deleteStackTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.STACK },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteStack",
-      () => komodo.client.write("DeleteStack", { id: args.stack }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteStack", () => komodo.client.write("DeleteStack", { id: args.stack }));
     const built = buildDeleteResult("stack", args.stack, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteStackTool);
 
 // ============================================================================
 // Lifecycle
@@ -217,20 +224,20 @@ export const stackActionTool = defineTool({
   input: stackActionInputSchema,
   output: actionResultSchema,
   annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+  guardrail: destructiveWhenActionIn(["destroy"]),
   _meta: { category: ToolCategories.STACK },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = STACK_ACTION_API_MAP[args.action];
-    const update = await wrapExecuteAndPoll(
-      `${args.action} stack`,
-      () => komodo.client.execute(apiAction, { stack: args.stack }),
-      abortSignal,
-      reportProgress,
+    const update = await wrapExecuteAndPoll(`${args.action} stack`, () =>
+      komodo.client.execute(apiAction, { stack: args.stack }),
     );
     const payload = buildActionResult(update, args.action, "stack", args.stack);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(stackActionTool);

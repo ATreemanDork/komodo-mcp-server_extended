@@ -3,10 +3,15 @@
  *
  * Zod schemas for Komodo Update history (`komodo_update_*` tools, read-only).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/update.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/update
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { pageOutputSchema, resourceLinkSchema } from "./shared.js";
 
 export const updateIdSchema = z.string().min(1).describe("Update id (MongoDB ObjectId hex)");

@@ -7,10 +7,15 @@
  * groups Docker Swarm manager servers, exposing per-node and per-service
  * operations on top of the underlying cluster.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/swarm.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/swarm
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { resourceNameSchema } from "./validators.js";
 import { actionResultSchema, maintenanceWindowSchema, pageOutputSchema, resourceLinkSchema } from "./shared.js";
 
@@ -157,12 +162,6 @@ export const swarmActionInputSchema = z.object({
   detach: z.boolean().optional().describe("For 'remove_stacks': do not wait for removal to complete"),
 });
 
-/**
- * Discriminated input for `komodo_swarm_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Swarm (`name` required, `config.server_ids` recommended)
- * - `action: "update"` — PATCH-style update of an existing Swarm (`swarm` required)
- */
 /**
  * Input for `komodo_swarm_apply` (create-or-update).
  *

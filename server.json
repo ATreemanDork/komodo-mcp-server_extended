@@ -1,62 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.MP-Tool/komodo-mcp-server",
-  "title": "Komodo MCP Server",
-  "description": "MCP server for Komodo - manage Docker containers, servers, stacks, and deployments via AI",
-  "websiteUrl": "https://github.com/MP-Tool/komodo-mcp-server",
+  "name": "io.github.ATreemanDork/komodo-mcp-server_extended",
+  "title": "Komodo MCP Server (extended)",
+  "description": "MCP server for the Komodo container-orchestration API — extends the upstream MP-Tool server with Docker introspection, Tag, Provider, Builder, OnboardingKey, UserGroup, Permission and Toml tools, a guardrail layer, and tool-output secret redaction.",
+  "websiteUrl": "https://github.com/ATreemanDork/komodo-mcp-server_extended",
   "repository": {
-    "url": "https://github.com/MP-Tool/komodo-mcp-server",
-    "source": "github",
-    "id": "1082088566"
+    "url": "https://github.com/ATreemanDork/komodo-mcp-server_extended",
+    "source": "github"
   },
-  "version": "1.4.1",
+  "version": "2.0.0",
   "packages": [
     {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "komodo-mcp-server",
-      "version": "1.4.1",
-      "runtimeHint": "npx",
-      "transport": {
-        "type": "stdio"
-      },
-      "environmentVariables": [
-        {
-          "name": "KOMODO_URL",
-          "description": "Komodo Core API URL",
-          "placeholder": "https://komodo.example.com",
-          "isRequired": true,
-          "isSecret": false
-        },
-        {
-          "name": "KOMODO_API_KEY",
-          "description": "API key for key-based authentication (recommended)",
-          "isRequired": false,
-          "isSecret": true
-        },
-        {
-          "name": "KOMODO_API_SECRET",
-          "description": "API secret for key-based authentication (recommended)",
-          "isRequired": false,
-          "isSecret": true
-        },
-        {
-          "name": "KOMODO_USERNAME",
-          "description": "Username for login authentication (alternative to API key)",
-          "isRequired": false,
-          "isSecret": true
-        },
-        {
-          "name": "KOMODO_PASSWORD",
-          "description": "Password for login authentication (alternative to API key)",
-          "isRequired": false,
-          "isSecret": true
-        }
-      ]
-    },
-    {
       "registryType": "oci",
-      "identifier": "ghcr.io/mp-tool/komodo-mcp-server:1.4.1",
+      "identifier": "ghcr.io/atreemandork/komodo-mcp-server_extended:2.0.0",
       "runtimeHint": "docker",
       "transport": {
         "type": "stdio"
@@ -71,27 +27,52 @@
         },
         {
           "name": "KOMODO_API_KEY",
-          "description": "API key for key-based authentication (recommended)",
+          "description": "API key for key-based authentication",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "KOMODO_API_SECRET",
+          "description": "API secret for key-based authentication",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/atreemandork/komodo-mcp-server_extended:2.0.0",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:{MCP_PORT}/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "KOMODO_URL",
+          "description": "Komodo Core API URL",
+          "placeholder": "https://komodo.example.com",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "KOMODO_API_KEY",
+          "description": "API key (recommended auth). Alternatively use KOMODO_USERNAME + KOMODO_PASSWORD, or KOMODO_JWT_TOKEN.",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "KOMODO_API_SECRET",
-          "description": "API secret for key-based authentication (recommended)",
+          "description": "API secret (paired with KOMODO_API_KEY).",
           "isRequired": false,
           "isSecret": true
         },
         {
-          "name": "KOMODO_USERNAME",
-          "description": "Username for login authentication (alternative to API key)",
+          "name": "MCP_PORT",
+          "description": "Port the Streamable HTTP transport listens on (the /mcp endpoint)",
+          "placeholder": "8000",
           "isRequired": false,
-          "isSecret": true
-        },
-        {
-          "name": "KOMODO_PASSWORD",
-          "description": "Password for login authentication (alternative to API key)",
-          "isRequired": false,
-          "isSecret": true
+          "isSecret": false
         }
       ]
     }

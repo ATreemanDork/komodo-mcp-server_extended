@@ -4,10 +4,15 @@
  * Zod schemas for deployment configuration including image sources,
  * restart policies, and container settings.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/deployment.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/deployment
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
 import {
   PARAM_DESCRIPTIONS,
@@ -113,12 +118,6 @@ export const deploymentActionInputSchema = z.object({
   deployment: deploymentIdSchema.describe("Deployment ID or name"),
 });
 
-/**
- * Discriminated input for `komodo_deployment_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Deployment (`name` required, `server_id` and `image` recommended)
- * - `action: "update"` — PATCH-style update of an existing Deployment (`deployment` required)
- */
 /**
  * Input for `komodo_deployment_apply` (create-or-update).
  *

@@ -1,11 +1,13 @@
 /**
  * Tool Categories
  *
- * Forward-compatible category metadata attached to every tool via
- * `_meta.category`. The MCP-Server-Framework can use this for categorization,
- * filtering, or other metadata-driven behavior. Categories are not enforced
- * or interpreted by the framework — they are opaque strings that can be used
- * as needed by the server implementation or client applications.
+ * Opaque category strings attached to every tool via `_meta.category`,
+ * wired through `registerTool()` in `src/server/create-server.ts`.
+ * Not enforced or interpreted anywhere in this codebase — carried
+ * for client-side filtering/grouping only.
+ *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/config/categories.ts).
  *
  * @module config/categories
  */
@@ -27,6 +29,14 @@ export const ToolCategories = {
   VARIABLE: "variable",
   RESOURCE_SYNC: "resource_sync",
   UPDATE: "update",
+  DOCKER: "docker",
+  TAG: "tag",
+  ONBOARDING_KEY: "onboarding_key",
+  BUILDER: "builder",
+  PROVIDER: "provider",
+  USER_GROUP: "user_group",
+  PERMISSION: "permission",
+  TOML: "toml",
 } as const;
 
 export type ToolCategory = (typeof ToolCategories)[keyof typeof ToolCategories];

@@ -1,239 +1,214 @@
-<div align="center">
+# Komodo MCP Server (extended)
 
-# 🦎 Komodo MCP Server
+A comprehensive [Model Context Protocol](https://modelcontextprotocol.io) server
+for the [Komodo](https://github.com/moghtech/komodo) container-orchestration API.
 
-**Model Context Protocol Server for [Komodo](https://github.com/moghtech/komodo)**
+This is an **extended fork** of [`MP-Tool/komodo-mcp-server`](https://github.com/MP-Tool/komodo-mcp-server)
+by Marcel Pfennig (GPL-3.0). It carries that project's ideas forward with eight
+additional tool categories, a guardrail layer for destructive operations, and
+tool-output secret redaction. See [FORK_NOTES.md](FORK_NOTES.md) for the full
+delta and [Attribution](#attribution) below.
 
-Manage your Docker or Podman deployments through Komodo with AI assistants and automation tools.
+> **Not affiliated with or endorsed by the upstream project.** It's an honest
+> parallel offering — the transport architecture diverged (see below), so it is
+> a fork rather than a proposed merge.
 
-Komodo MCP Server enables seamless interaction between AI assistants (like Claude, GitHub Copilot) and Komodo (Container Management Platform) for efficient container management, server orchestration, and deployment operations. The MCP-Server gives you the ability to control your Komodo-managed infrastructure by using natural language or automated workflows.
+## What it does
 
-[![GitHub Release](https://img.shields.io/github/v/release/MP-Tool/komodo-mcp-server?logo=github)](https://github.com/MP-Tool/komodo-mcp-server/releases) [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE) [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/MP-Tool/komodo-mcp-server/pkgs/container/komodo-mcp-server) [![npm](https://img.shields.io/npm/v/komodo-mcp-server?logo=npm&logoColor=white)](https://www.npmjs.com/package/komodo-mcp-server) [![MCP Registry](https://img.shields.io/badge/MCP_Registry-Listed-green?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0tMSAxNUg5di02aDJ2NnptNC0ySDEzdi00aDJ2NHoiLz48L3N2Zz4=)](https://registry.modelcontextprotocol.io) [![MCP](https://img.shields.io/badge/MCP-Compliant-green)](https://modelcontextprotocol.io)
+Exposes the Komodo Core API to an MCP client (Claude, or anything speaking MCP)
+as **114 tools** across servers, stacks, deployments, builds, repos, containers,
+raw Docker introspection, tags, providers, permissions, and more — enough to
+drive a Komodo fleet conversationally.
 
-[![GitHub Issues](https://img.shields.io/github/issues/MP-Tool/komodo-mcp-server?logo=github)](https://github.com/MP-Tool/komodo-mcp-server/issues) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/MP-Tool/komodo-mcp-server/badge)](https://securityscorecards.dev/viewer/?uri=github.com/MP-Tool/komodo-mcp-server) [![Build Status](https://github.com/MP-Tool/komodo-mcp-server/actions/workflows/release.yml/badge.svg)](https://github.com/MP-Tool/komodo-mcp-server/actions/workflows/release.yml) [![CodeQL](https://github.com/MP-Tool/komodo-mcp-server/actions/workflows/codeql.yml/badge.svg)](https://github.com/MP-Tool/komodo-mcp-server/actions/workflows/codeql.yml)
+## What this fork adds over upstream
 
-[Features](#features) • [Quick Start](#quick-start) • [Authentication](#authentication) • [Documentation](#documentation)
+- **8 new tool categories** (upstream had 70 tools; this fork has 114):
+  Docker introspection (image/network/volume list+inspect), Tag, Provider
+  (git-provider + docker-registry accounts), Builder, OnboardingKey, UserGroup,
+  Permission (the RBAC matrix), and Toml export.
+- **A guardrail layer.** Destructive and critical operations require a two-step
+  dry-run → confirm-token handshake before they execute, so a model can't delete
+  or overwrite in a single unreviewed call. Safe operations pass through untouched.
+- **Tool-output secret redaction.** Closes the secret-leak-through-tool-output
+  class of issue (the channel described in upstream
+  [#160](https://github.com/MP-Tool/komodo-mcp-server/issues/160)): variable
+  values, resolved container env, provider tokens, alerter webhook secrets and
+  tokenised clone URLs are masked in tool responses.
+- **Own MCP/SDK seam.** Built directly on the official
+  [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)
+  rather than an intermediate framework — every tool declares a Zod input *and*
+  output schema, validated on each call.
+- **A real integration test suite** (in addition to unit tests) that exercises
+  the full tool surface against a live Komodo instance with disposable resources.
 
-</div>
+## Transports
 
----
+- **stdio** — for local MCP clients (Claude Desktop, editors).
+- **Streamable HTTP** — `POST/GET/DELETE /mcp`, for gateway-fronted deployments
+  (e.g. behind LiteLLM). `/health` and `/ready` endpoints for liveness/readiness.
 
-## Features
+Select with `MCP_TRANSPORT=stdio|http`.
 
-### 🛠️ Complete Infrastructure Control
+## Quick start
 
-- **70 Tools, 16 Categories** — Full lifecycle management for containers, stacks, deployments, servers, builds, repos, procedures, actions, alerters, Docker Swarms (Komodo v2), variables, resource syncs and update history — from listing and inspecting to deploying, building, scaling and destroying.
-- **Remote Terminal Access** — Execute commands on servers, containers, deployments, and stack services with real-time output streaming, exit codes, and progress reporting.
-- **Log Search & Analysis** — Pattern-based log search across containers with configurable tail limits and match counting.
+### Docker (build-it-yourself)
 
-### 🔌 Deploy Anywhere
-
-- **Multi-Transport** — Streamable HTTP (stateful), HTTPS with TLS, legacy SSE, and stdio. Same server, any client.
-- **Multi-Platform Docker** — Production-ready images for `amd64`, `arm64`, `arm/v7`, and `arm/v6` (Raspberry Pi). Non-root, multi-stage builds with tini init.
-- **Works with Any MCP Client** — Claude Desktop, VS Code / GitHub Copilot, or any MCP-compatible tool. Runs via Docker, npx, or native Node.js.
-
-### 🔐 Security & Authentication
-
-- **Three Auth Methods** — API Key/Secret (recommended), username/password, or JWT token. All support Docker secrets via `*_FILE` variants.
-- **Runtime Configuration** — Set or change credentials dynamically via `komodo_configure` without restarting the server.
-- **Hardened by Default** — Input validation (Zod), secret scrubbing in logs, rate limiting, DNS rebinding protection, and security headers via Helmet.
-
-### ⚡ Reliability & Operations
-
-- **Live Progress & Cancellation** — Long-running operations (deploy, start, stop) report real-time progress. Cancel any operation mid-flight via AbortSignal.
-- **Auto-Reconnection** — Connection monitoring with automatic recovery and exponential backoff. Auth failures stop retries immediately.
-- **Health & Readiness** — Kubernetes-ready `/health` and `/ready` endpoints. `komodo_health_check` reports server version, connectivity, and auth status.
-
-*Built on [mcp-server-framework](https://github.com/MP-Tool/mcp-server-framework) — a production-ready TypeScript MCP server framework with structured logging, OpenTelemetry, and session management.*
-
-
-## Available Tools (70)
-
-| Category | Tools |
-|----------|-------|
-| **Configuration** | `komodo_configure`, `komodo_health_check` |
-| **Containers** | `komodo_container_list`, `komodo_container_inspect`, `komodo_container_logs`, `komodo_container_search_logs`, `komodo_container_action` *(start/stop/restart/pause/unpause)* |
-| **Servers** | `komodo_server_list`, `komodo_server_info`, `komodo_server_stats`, `komodo_server_apply` *(create/update)*, `komodo_server_delete`, `komodo_server_action` *(start_all/restart_all/pause_all/unpause_all/stop_all\_containers, prune\_\*, delete\_network/image/volume)* |
-| **Stacks** | `komodo_stack_list`, `komodo_stack_info`, `komodo_stack_apply` *(create/update)*, `komodo_stack_delete`, `komodo_stack_action` *(deploy/pull/start/restart/pause/unpause/stop/destroy)* |
-| **Deployments** | `komodo_deployment_list`, `komodo_deployment_info`, `komodo_deployment_apply` *(create/update)*, `komodo_deployment_delete`, `komodo_deployment_action` *(deploy/pull/start/restart/pause/unpause/stop/destroy)* |
-| **Builds** | `komodo_build_list`, `komodo_build_info`, `komodo_build_action` *(run/cancel)*, `komodo_build_logs`, `komodo_build_apply` *(create/update)*, `komodo_build_delete` |
-| **Repos** | `komodo_repo_list`, `komodo_repo_info`, `komodo_repo_action` *(clone/pull/build/cancel_build)*, `komodo_repo_apply` *(create/update)*, `komodo_repo_delete` |
-| **Procedures** | `komodo_procedure_list`, `komodo_procedure_info`, `komodo_procedure_action` *(run)*, `komodo_procedure_apply` *(create/update)*, `komodo_procedure_delete` |
-| **Actions** | `komodo_action_list`, `komodo_action_info`, `komodo_action_action` *(run/cancel)*, `komodo_action_apply` *(create/update)*, `komodo_action_delete` |
-| **Alerters** | `komodo_alerter_list`, `komodo_alerter_info`, `komodo_alerter_apply` *(create/update)*, `komodo_alerter_delete` |
-| **Swarms** | `komodo_swarm_list`, `komodo_swarm_info`, `komodo_swarm_apply` *(create/update)*, `komodo_swarm_delete`, `komodo_swarm_nodes_list`, `komodo_swarm_services_list`, `komodo_swarm_action` *(update_node/remove_nodes/remove_services/remove_stacks)* |
-| **Resource Syncs** | `komodo_resource_sync_list`, `komodo_resource_sync_info`, `komodo_resource_sync_action` *(run/refresh)*, `komodo_resource_sync_apply` *(create/update)*, `komodo_resource_sync_delete` |
-| **Variables** | `komodo_variable_list`, `komodo_variable_info`, `komodo_variable_apply` *(create/update — value/description/is_secret)*, `komodo_variable_delete` |
-| **Updates** | `komodo_update_list` *(filterable, paginated)*, `komodo_update_info` |
-| **Terminal** | `komodo_exec` *(target: server / container / deployment / stack_service)* |
-| **API Keys** | `komodo_user_list_api_keys`, `komodo_user_create_api_key`, `komodo_user_delete_api_key` |
-
-> **Tip:** Every tool carries `_meta.category` (one of `config`, `container`, `server`, `stack`, `deployment`, `build`, `repo`, `procedure`, `action`, `alerter`, `swarm`, `resource-sync`, `variable`, `update`, `terminal`, `user`) and a `requiredScopes` array (`komodo:read` / `komodo:operate` / `komodo:admin`), so MCP clients and gateways can filter or gate tools by category and three-tier RBAC.
->
-> List/info/logs tools support **cursor pagination** via `{ cursor, page_size }` (1–100, default 50) and emit `_meta.page.next_cursor` when more items are available. `inspect`, `info`, `logs`, and `search_logs` responses also include a session-scoped `ephemeral://…` resource link so large payloads can be fetched out-of-band via `resources/read`; pass `inline_full: true` to force inlining.
-
-
-## Quick Start
-
-### Docker Compose (Recommended for HTTP)
-
-Deploy as a persistent HTTP server — connect from any MCP client.
+No public image is published yet, so build from source:
 
 ```bash
-mkdir komodo-mcp && cd komodo-mcp
-curl -O https://raw.githubusercontent.com/MP-Tool/komodo-mcp-server/main/docker/compose.yaml
-curl -O https://raw.githubusercontent.com/MP-Tool/komodo-mcp-server/main/docker/docker.env
-cp docker.env .env  # Edit with your credentials
-docker compose up -d
+git clone https://github.com/ATreemanDork/komodo-mcp-server_extended.git
+cd komodo-mcp-server_extended
+cp .env.example .env          # fill in KOMODO_URL / KOMODO_API_KEY / KOMODO_API_SECRET
+docker compose -f docker/compose.yaml up -d --build
 ```
 
-→ **[Full Docker Guide](docker/README.md)**
+The container defaults to HTTP transport on port 8000; check readiness with
+`curl localhost:8000/ready`.
 
-### Claude Desktop
+### Local (stdio, for Claude Desktop / editors)
 
-Add to your `claude_desktop_config.json` (Settings → Developer → Edit Config):
-
-```json
-"komodo-mcp-server": {
-  "command": "docker",
-  "args": [
-    "run", "-i", "--rm",
-    "-e", "KOMODO_URL=https://komodo.example.com:9120",
-    "-e", "KOMODO_API_KEY=api-key",
-    "-e", "KOMODO_API_SECRET=api-secret",
-    "ghcr.io/mp-tool/komodo-mcp-server:latest"
-  ]
-}
+```bash
+npm install
+npm run build
+KOMODO_URL=https://komodo.example.com \
+KOMODO_API_KEY=... KOMODO_API_SECRET=... \
+MCP_TRANSPORT=stdio node build/index.js
 ```
 
-→ **[Full Claude Guide](examples/claude/README.md)**
-
-### VS Code / GitHub Copilot
-
-Add to `.vscode/mcp.json` in your workspace:
+Claude Desktop (`claude_desktop_config.json`):
 
 ```json
 {
-  "servers": {
-    "Komodo MCP Server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "KOMODO_URL=https://komodo.example.com:9120",
-        "-e", "KOMODO_API_KEY=api-key",
-        "-e", "KOMODO_API_SECRET=api-secret",
-        "ghcr.io/mp-tool/komodo-mcp-server:latest"
-      ]
+  "mcpServers": {
+    "komodo": {
+      "command": "node",
+      "args": ["/absolute/path/to/komodo-mcp-server_extended/build/index.js"],
+      "env": {
+        "KOMODO_URL": "https://komodo.example.com",
+        "KOMODO_API_KEY": "your-api-key",
+        "KOMODO_API_SECRET": "your-api-secret",
+        "MCP_TRANSPORT": "stdio"
+      }
     }
   }
 }
 ```
 
-→ **[Full VS Code Guide](examples/vscode/README.md)** · **[Node.js / npx (no Docker)](examples/node/README.md)** · **[All Integrations](examples/README.md)**
+## Configuration
 
-## Use
+Copy `.env.example` to `.env`. Runtime variables:
 
-Once connected, ask Claude, Copilot, or any MCP-compatible assistant:
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `KOMODO_URL` | yes | — | Komodo Core API URL |
+| `KOMODO_API_KEY` | one method | — | key-based auth (recommended) |
+| `KOMODO_API_SECRET` | one method | — | key-based auth (recommended) |
+| `MCP_TRANSPORT` | no | `stdio` | `stdio` \| `http` |
+| `MCP_BIND_HOST` | no | `127.0.0.1` | HTTP bind host (`0.0.0.0` in the container) |
+| `MCP_PORT` | no | `8000` | HTTP port (`/mcp`) |
+| `MCP_MAX_SESSIONS` | no | `100` | concurrent HTTP session cap |
+| `MCP_SESSION_IDLE_MS` | no | `30m` | idle HTTP session eviction (duration or ms) |
+| `GUARDRAIL_HMAC_SECRET` | no | random per boot | set to keep confirm tokens valid across restarts |
 
-```
-"List all my Komodo servers"
-"Show containers on production-server"  
-"Start the nginx container"
-"Deploy my-app to staging"
-"Get stats for dev-server"
-```
+**Authentication** — provide exactly one method: `KOMODO_API_KEY` +
+`KOMODO_API_SECRET` (recommended), `KOMODO_USERNAME` + `KOMODO_PASSWORD`, or a
+pre-obtained `KOMODO_JWT_TOKEN`. Every credential variable also accepts a
+`*_FILE` variant (e.g. `KOMODO_API_KEY_FILE=/run/secrets/...`) that reads the
+value from a file path, for Docker secrets. See `.env.example` for the full
+list plus optional tuning variables (`API_TIMEOUT_MS`, resource-link TTLs).
 
-### Testing with MCP Inspector
+The `GITEA_*` and `KOMODO_TEST_SERVER_ID` variables in `.env.example` are used
+**only** by the integration test suite — never at runtime.
+
+## Operational notes & sharp edges
+
+The extended tool surface is powerful but has edges worth knowing before you point
+an agent at a production Komodo.
+
+- **The HTTP transport has no authentication of its own.** `/mcp` is intended to
+  sit behind a gateway (LiteLLM, etc.) or reverse proxy that handles auth. Do
+  **not** expose it directly to an untrusted network — anyone who can reach the
+  port can drive every tool. Bind to loopback (`MCP_BIND_HOST=127.0.0.1`) or a
+  private network and put an authenticating proxy in front.
+- **114 tools is a large surface.** Handing a model all of them at once can
+  degrade tool selection and eat context. If you only need a subset, filter at
+  the client/gateway to the categories you actually use.
+- **Destructive tools require a two-step dry-run → confirm.** The first call to a
+  guardrailed tool (deletes, `destroy`, permission changes, privileged onboarding
+  keys) returns `isError: true` with a `confirm` token and **does not execute** —
+  that is by design, not a failure. Call again with the same arguments plus
+  `dry_run: false` and that token to actually run it. An agent that treats the
+  first response as a hard error will never complete these operations.
+- **`komodo_exec` needs Komodo Core/Periphery ≥ 2.3.0.** On older versions it
+  returns scaffold output with a null exit code, due to an upstream Periphery bug
+  ([moghtech/komodo#1289](https://github.com/moghtech/komodo/issues/1289), fixed
+  in 2.3.0). Not a bug in this server.
+- **Permission model quirks (Komodo, not this server):**
+  `komodo_permission_update_on_resource_type` writes to the target's own `all`
+  map, which is **not** visible through `komodo_permission_list` /
+  `list_for_target`; and reverting a grant to `None` does **not** delete the
+  underlying permission document — it stays, at level `None`.
+- **`komodo_permission_update_user_base` requires Super Admin** when the target
+  user is itself an admin — a plain admin credential gets a 500.
+- **Variable names must match `^[a-zA-Z_][a-zA-Z0-9_]*$`** (Komodo Core
+  constraint) — no hyphens. Enforced client-side so bad names fail fast.
+- **`komodo_configure` reconfigures the live Komodo connection at runtime.** Handy
+  for switching targets, but it changes global state for the session — use
+  deliberately.
+- **Secret redaction is on by default — with one deliberate exception.** Variable
+  values, resolved container env, provider tokens, alerter webhook secrets and
+  tokenised clone URLs are masked in tool output. **But a few tools exist
+  precisely to hand back a freshly-created credential** — creating an API key
+  (`komodo_user_create_api_key`) or a privileged onboarding key
+  (`komodo_onboarding_key_apply`) returns the real secret value **unredacted**,
+  because masking it would defeat the entire purpose of the call. These
+  value-reveal tools are guardrail-gated (dry-run/confirm), but a successful call
+  returns a live secret in its output.
+
+  > ⚠️ **Do not enable the value-reveal tools for cloud-hosted agents.** When the
+  > model runs in someone else's cloud, tool output crosses that trust boundary —
+  > the secret is transmitted to a third-party model provider (the exact #160 leak
+  > channel this fork otherwise closes). Enable `komodo_user_create_api_key` /
+  > `komodo_onboarding_key_apply` **only** for local agent/model deployments where
+  > tool output never leaves infrastructure you control. For cloud/hosted agents,
+  > disable or filter them at the gateway.
+
+## Development
 
 ```bash
-npx @modelcontextprotocol/inspector --url http://localhost:8000/mcp
-```
-
-Use `/mcp` for Streamable HTTP or `/sse` for legacy SSE transport (if enabled). Adjust host and port to match your setup.
-
-## Authentication
-
-Three methods are supported — use whichever fits your setup:
-
-| Method | Environment Variables | Best For |
-|--------|----------------------|----------|
-| **API Key** (recommended) | `KOMODO_API_KEY` + `KOMODO_API_SECRET` | Service accounts, automation |
-| **Username / Password** | `KOMODO_USERNAME` + `KOMODO_PASSWORD` | Interactive users |
-| **JWT Token** | `KOMODO_JWT_TOKEN` | Browser-based SSO (OIDC, GitHub, Google OAuth) |
-
-`KOMODO_URL` is always required. All credentials also support Docker secrets via `*_FILE` variants (e.g. `KOMODO_API_KEY_FILE`).
-
-For the full configuration reference (env vars, config files, Docker secrets), see the **[Configuration Guide](config/README.md)**.
-
-## Disclaimer
-
-AI tools (GitHub Copilot, Claude) are used as part of the development workflow — for code generation, architecture exploration, and documentation drafting. Every line of code and documentation is manually reviewed to ensure quality, correctness, and compliance with established engineering standards.
-
-This software is provided under the [GPL-3.0 License](LICENSE). If you find bugs or have ideas, [issues](https://github.com/MP-Tool/komodo-mcp-server/issues) and [contributions](CONTRIBUTING.md) are always welcome.
-
-## Contributing
-Contributions are welcome! See our [Contributing Guide](CONTRIBUTING.md) for details.
-
-- 🐛 [Report bugs](https://github.com/MP-Tool/komodo-mcp-server/issues)
-- 💡 [Request features](https://github.com/MP-Tool/komodo-mcp-server/issues)
-- 🔧 [Submit PRs](https://github.com/MP-Tool/komodo-mcp-server/pulls)
-
-### Development
-
-```bash
-# Clone and install
-git clone https://github.com/MP-Tool/komodo-mcp-server.git
-cd komodo-mcp-server
 npm install
-
-# Build and run
-npm run build
-npm start
+npm run typecheck && npm run build && npm run lint && npm test   # unit tests
 ```
 
-## Documentation
+`npm test` runs the unit suite only. The integration suite talks to a **real**
+Komodo instance and creates/destroys disposable resources — run it explicitly
+against a throwaway server you control:
 
-| Guide | Description |
-|-------|-------------|
-| **[Configuration](config/README.md)** | All environment variables, config file formats, priority chain, Docker secrets |
-| **[Docker Deployment](docker/README.md)** | Docker Compose setup, health checks, production deployment |
-| **[Client Integrations](examples/README.md)** | Claude Desktop, VS Code, Node.js/npx setup guides |
-| **[Contributing](CONTRIBUTING.md)** | Development setup, coding standards, PR guidelines |
-| **[Security](SECURITY.md)** | Vulnerability reporting, security best practices |
-| **[Changelog](CHANGELOG.md)** | Version history and release notes |
+```bash
+# set KOMODO_URL/KEY/SECRET + KOMODO_TEST_SERVER_ID in .env first
+npm run test:integration
+```
 
-### License
-GPL-3.0 License - see [LICENSE](LICENSE) for details.
+See [test/integration/README.md](test/integration/README.md) for the required env.
 
-### Requirements
+## Requirements
 
-- **Komodo** v2.0.0 or later
-- **Docker** (for containerized deployment) or **Node.js 22+** (for native installation)
-- **Valid Komodo credentials** (API Key/Secret, Username/Password, or JWT Token)
+- Node.js 20+ (built and tested on 22)
+- A reachable Komodo Core instance with an API key/secret
+
+## Attribution
+
+- **Original author:** Marcel Pfennig / MP-Tool —
+  [`MP-Tool/komodo-mcp-server`](https://github.com/MP-Tool/komodo-mcp-server).
+- **This fork / extensions:** ATreemanDork.
+
+## License
+
+GPL-3.0, preserved from upstream. See [LICENSE.txt](LICENSE.txt).
 
 ## Security
-Report security vulnerabilities via GitHub's Private Vulnerability Reporting (see [SECURITY.md](SECURITY.md)).
 
-**Best practices:**
-- Never commit credentials
-- Use environment variables
-- Keep dependencies updated
-- Run as non-root user (default in Docker)
-
-## Links
-
-- **[Komodo](https://github.com/moghtech/komodo)** — Container management platform
-- **[Komodo Docs](https://komo.do/docs)** — Official documentation
-- **[MCP Specification](https://modelcontextprotocol.io)** — Model Context Protocol
-- **[MCP Registry](https://registry.modelcontextprotocol.io)** — MCP server registry
-
----
-
-<div align="center">
-
-**Built with ❤️ for the Komodo community 🦎**
-
-[Report Bug](https://github.com/MP-Tool/komodo-mcp-server/issues) · [Request Feature](https://github.com/MP-Tool/komodo-mcp-server/issues) · [Discussions](https://github.com/MP-Tool/komodo-mcp-server/discussions)
-
-</div>
+This fork closes the tool-output secret-leak class described in upstream
+[#160](https://github.com/MP-Tool/komodo-mcp-server/issues/160). To report a
+vulnerability, please open an issue (or contact the maintainer privately for
+anything sensitive) rather than disclosing details publicly.

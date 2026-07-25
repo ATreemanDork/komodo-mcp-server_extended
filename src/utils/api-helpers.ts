@@ -1,26 +1,26 @@
 /**
  * API Helpers
  *
- * Low-level utilities for Komodo API interaction including client access,
- * cancellation checks, and error classification/wrapping.
+ * Minimal port of the reference repo's `utils/api-helpers.ts` — only what
+ * `komodo_server_list` needs: client access (`requireClient`) and API-error
+ * classification (`wrapApiCall`). Pagination, polling, and the other
+ * utilities in the reference `utils/*` belong to the full
+ * 16-domain tool surface port, not this one-tool build.
+ *
+ * DEVIATION from the reference: the reference's `wrapApiCall` also checks
+ * `OperationCancelledError` from `mcp-server-framework` and takes an
+ * `AbortSignal` to support mid-call cancellation. That framework type has
+ * no local equivalent yet (cancellation support belongs to a later step
+ * once the guardrail/task layer needs it) — this port keeps only the
+ * Komodo-error-classification behavior (network/timeout/auth/HTTP mapping).
  *
  * @module utils/api-helpers
  */
 
 import type { KomodoClient } from "../client.js";
-import {
-  ClientNotConfiguredError,
-  ApiError,
-  ConnectionError,
-  AuthenticationError,
-  extractKomodoError,
-} from "../errors/index.js";
-import { OperationCancelledError } from "mcp-server-framework";
 import { komodoConnection } from "../client.js";
-
-// ============================================================================
-// Error Code Sets
-// ============================================================================
+import { ApiError, AuthenticationError, ConnectionError, extractKomodoError } from "../errors/index.js";
+import { AppErrorFactory } from "../errors/index.js";
 
 /** Connection-related Node.js error codes */
 const CONNECTION_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "ERR_NETWORK"]);
@@ -28,43 +28,19 @@ const CONNECTION_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ENOTFOUND
 /** Timeout-related Node.js error codes */
 const TIMEOUT_ERROR_CODES = new Set(["ECONNABORTED", "UND_ERR_CONNECT_TIMEOUT"]);
 
-// ============================================================================
-// Client Access
-// ============================================================================
-
 /**
  * Returns the connected Komodo client.
- * Throws ClientNotConfiguredError with a state-aware message if not connected.
+ * Throws `ClientNotConfiguredError` with a state-aware message if not connected.
  */
 export function requireClient(): KomodoClient {
   const client = komodoConnection.getClient();
   if (!client) {
-    throw ClientNotConfiguredError.notConfigured();
+    throw AppErrorFactory.client.notConfigured();
   }
   return client;
 }
 
-// ============================================================================
-// Cancellation
-// ============================================================================
-
-/**
- * Checks if an operation was cancelled via AbortSignal.
- */
-export function checkCancelled(signal: AbortSignal | undefined, operation: string): void {
-  if (signal?.aborted) {
-    throw new OperationCancelledError(operation);
-  }
-}
-
-// ============================================================================
-// API Call Wrapper
-// ============================================================================
-
-/**
- * Extracts the HTTP status code from a komodo_client plain-object rejection.
- * Returns undefined if the error is not a komodo_client response.
- */
+/** Extracts the HTTP status code from a komodo_client plain-object rejection. */
 function getKomodoStatus(error: unknown): number | undefined {
   if (typeof error === "object" && error !== null) {
     const status = (error as Record<string, unknown>).status;
@@ -89,51 +65,37 @@ function getErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Wraps an API call with error handling and cancellation support.
- *
- * Properly handles komodo_client rejections which are plain objects:
- * - HTTP errors: { status: 4xx|5xx, result: { error: "message", trace?: [...] } }
- * - Network errors: { status: 1, result: { error: "..." }, error: <Error> }
+ * Wraps a Komodo API call, translating `komodo_client`'s plain-object
+ * rejections (HTTP errors: `{ status, result: { error } }`; network errors:
+ * `{ status: 1, error: <Error> }`) and raw Node.js errors into the local
+ * `AppError` hierarchy.
  */
-export async function wrapApiCall<T>(operation: string, apiCall: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  checkCancelled(signal, operation);
-
+export async function wrapApiCall<T>(operation: string, apiCall: () => Promise<T>): Promise<T> {
   try {
     return await apiCall();
   } catch (error) {
-    checkCancelled(signal, operation);
-
-    // Already-typed errors pass through unchanged
-    if (OperationCancelledError.isCancellation(error)) {
-      throw new OperationCancelledError(operation);
-    }
     if (error instanceof ApiError || error instanceof ConnectionError || error instanceof AuthenticationError) {
       throw error;
     }
 
-    // komodo_client plain-object rejections
     const status = getKomodoStatus(error);
     if (status !== undefined) {
       const message = extractKomodoError(error);
 
-      // Network failure (status === 1)
       if (status === 1) {
         throw ConnectionError.failed(operation, message);
       }
-      // Authentication errors
       if (status === 401) {
         throw AuthenticationError.unauthorized();
       }
       if (status === 403) {
         throw AuthenticationError.forbidden();
       }
-      // HTTP errors (4xx, 5xx)
       if (status >= 400) {
         throw ApiError.fromResponse(status, message);
       }
     }
 
-    // Standard Error instances (e.g. from fetch or other Node.js APIs)
     if (error instanceof Error) {
       const code = getErrorCode(error);
 

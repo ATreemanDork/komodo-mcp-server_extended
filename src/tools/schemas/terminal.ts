@@ -7,10 +7,15 @@
  * schema would obscure validity — Zod's discriminated union enforces
  * correctness at runtime and gives the LLM a precise schema.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/terminal.ts) — `z`
+ * imported from `zod` directly rather than the reference's
+ * third-party framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/terminal
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { VALIDATION_LIMITS } from "../../config/index.js";
 import { serverIdSchema, containerNameSchema, stackIdSchema, deploymentIdSchema } from "./validators.js";
 

@@ -1,32 +1,52 @@
 /**
  * Resource Link Helper
  *
- * Bridges Komodo tool handlers to the framework's `DynamicResourceRegistry`.
- * For session-bound clients, large payloads (inspect output, full logs,
- * compose files) are stored ephemerally and surfaced as a `resource_link`
- * content block plus a `resourceLink` field in the structured payload.
- * Stateless callers and explicit `inline_full=true` opt-outs continue to
- * receive the full payload inline.
+ * Bridges Komodo tool handlers to `src/mcp/resources.ts`'s ephemeral
+ * resource registry. For session-bound clients, large payloads (inspect
+ * output, full logs, compose files) are stored ephemerally and surfaced as
+ * a `resource_link` content block plus a `resourceLink` field in the
+ * structured payload. Stateless callers (stdio — no `sessionId`) and
+ * explicit `inline_full=true` opt-outs continue to receive the full payload
+ * inline.
+ *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/utils/resource-link.ts) — calls our own
+ * `mcp/resources.ts` registry instead of the reference's
+ * `mcp-server-framework` `DynamicResourceRegistry`, and reuses
+ * `resourceLinkSchema` (tools/schemas/shared.ts) for the return shape
+ * instead of the framework's `ResourceLinkSpec` type.
  *
  * @module utils/resource-link
  */
 
-import { getDynamicResourceRegistry, type ResourceLinkSpec, type ToolContext } from "mcp-server-framework";
+import type { z } from "zod";
+import { registerEphemeralResource } from "../mcp/resources.js";
+import type { resourceLinkSchema } from "../tools/schemas/shared.js";
 
-/** Logical category for a registered resource (segments the URI). */
-export type ResourceCategory = "info" | "inspect" | "logs" | "compose";
+export type { ResourceCategory } from "../mcp/resources.js";
+import type { ResourceCategory } from "../mcp/resources.js";
 
 /**
- * Caller surface — only the parts of `ToolContext` we actually need.
+ * Caller surface — only the part of `ToolHandlerExtra` we actually need.
  *
- * Keeping the dependency narrow lets unit tests stub the context with
- * a plain object instead of constructing a full `ToolContext`.
+ * Keeping the dependency narrow lets unit tests stub the context with a
+ * plain object instead of constructing a full `ToolHandlerExtra`. Declared
+ * as its own interface (not `Pick<ToolHandlerExtra, "sessionId">`) so
+ * `sessionId` explicitly allows `| undefined` — under this repo's
+ * `exactOptionalPropertyTypes`, a `Pick` of the SDK's own (narrower)
+ * optional property forced every caller to conditionally spread
+ * (`sessionId !== undefined ? { sessionId } : {}`) instead of just passing
+ * `{ sessionId }` straight from a destructured handler `extra`.
  */
-export type ResourceLinkContext = Pick<ToolContext, "sessionId">;
+export interface ResourceLinkContext {
+  readonly sessionId?: string | undefined;
+}
+
+export type ResourceLinkSpec = z.infer<typeof resourceLinkSchema>;
 
 /** Options for {@link tryRegisterResource}. */
 export interface RegisterResourceOptions {
-  /** Tool context — `sessionId` decides whether registration is possible. */
+  /** Tool call context — `sessionId` decides whether registration is possible. */
   readonly ctx: ResourceLinkContext;
   /** Logical category (URI path segment). */
   readonly category: ResourceCategory;
@@ -45,9 +65,9 @@ export interface RegisterResourceOptions {
 }
 
 /**
- * Register `content` in the dynamic resource registry and return a
- * link spec, or `null` if registration must be skipped (stateless caller
- * or explicit inline-full opt-out).
+ * Register `content` in the ephemeral resource registry and return a link
+ * spec, or `null` if registration must be skipped (stateless caller or
+ * explicit inline-full opt-out).
  *
  * Callers use the return value to decide between two output shapes:
  * - link spec → emit summary + resource link, drop the full payload from the body
@@ -63,7 +83,7 @@ export function tryRegisterResource(opts: RegisterResourceOptions): ResourceLink
   if (!sessionId) return null;
 
   try {
-    const { uri } = getDynamicResourceRegistry().register({
+    const { uri } = registerEphemeralResource({
       sessionId,
       category: opts.category,
       mimeType: opts.mimeType,

@@ -3,10 +3,15 @@
  *
  * Zod schemas for Komodo Alerter resources (`komodo_alerter_*` tools).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/alerter.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/alerter
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { resourceNameSchema } from "./validators.js";
 import { pageOutputSchema, resourceLinkSchema, maintenanceWindowSchema } from "./shared.js";
 

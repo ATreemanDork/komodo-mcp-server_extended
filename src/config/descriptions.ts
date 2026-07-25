@@ -3,6 +3,10 @@
  *
  * Reusable descriptions for Zod schema fields, response icons, and constants.
  *
+ * Ported verbatim from the reference repo
+ * (references/komodo-mcp-server/src/config/descriptions.ts) — no framework
+ * dependency to remove.
+ *
  * @module config/descriptions
  */
 
@@ -44,6 +48,15 @@ export const RESPONSE_ICONS = {
   INFO: "ℹ️",
   LIST: "📋",
   NETWORK: "🌐",
+  IMAGE: "💿",
+  VOLUME: "💾",
+  TAG: "🏷️",
+  ONBOARDING_KEY: "🔑",
+  BUILDER: "🏗️",
+  PROVIDER: "🔗",
+  USER_GROUP: "👥",
+  PERMISSION: "🛡️",
+  TOML: "📄",
   TIME: "⚡",
   AUTH: "🔐",
   VERSION: "📦",
@@ -101,12 +114,13 @@ export const CONFIG_DESCRIPTIONS = {
 // ============================================================================
 
 export const LOG_DESCRIPTIONS = {
-  TAIL_LINES: (defaultValue: number) => `Number of lines to show from the end of logs. Default: ${defaultValue}`,
+  TAIL_LINES: (defaultValue: number) =>
+    `Number of lines to show from the end of logs. Default: ${String(defaultValue)}`,
   TAIL_LINES_FOR_SEARCH: (defaultValue: number) =>
-    `Number of lines to retrieve before filtering. Default: ${defaultValue}`,
-  TIMESTAMPS: (defaultValue: boolean) => `Show timestamps in log output. Default: ${defaultValue}`,
+    `Number of lines to retrieve before filtering. Default: ${String(defaultValue)}`,
+  TIMESTAMPS: (defaultValue: boolean) => `Show timestamps in log output. Default: ${String(defaultValue)}`,
   SEARCH_QUERY: "Search query or pattern to filter logs (plain text, not regex)",
-  CASE_SENSITIVE: (defaultValue: boolean) => `Perform case-sensitive search. Default: ${defaultValue}`,
+  CASE_SENSITIVE: (defaultValue: boolean) => `Perform case-sensitive search. Default: ${String(defaultValue)}`,
 } as const;
 
 // ============================================================================

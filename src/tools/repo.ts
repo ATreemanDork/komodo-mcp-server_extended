@@ -10,27 +10,31 @@
  * - `komodo_repo_apply`   — create-or-update (discriminated by `action`)
  * - `komodo_repo_delete`  — unregister a repo
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/repo.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/repo
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  paginate,
-  renderRepoList,
-  renderRepoInfo,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { redactObject } from "../utils/redact.js";
+import { renderRepoList, renderRepoInfo } from "./renderers/repo.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   repoIdSchema,
   repoListOutputSchema,
@@ -38,11 +42,13 @@ import {
   repoActionOutputSchema,
   repoActionInputSchema,
   repoApplyInputSchema,
+} from "./schemas/repo.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type RepoListItem = Types.RepoListItem;
 
@@ -56,12 +62,12 @@ export const listReposTool = defineTool({
     "List all repos registered in Komodo. Shows id, name, state, attached server/builder, configured repo+branch, and the cloned/built/latest short commit hashes.",
   input: paginationInputSchema,
   output: repoListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.REPO },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const repos = await wrapApiCall("listRepos", () => komodo.client.read("ListRepos", {}), abortSignal);
+    const repos = await wrapApiCall("listRepos", () => komodo.client.read("ListRepos", {}));
 
     const allItems = repos.map((r: RepoListItem) => ({
       id: r.id,
@@ -80,9 +86,11 @@ export const listReposTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderRepoList(payload) });
+    return structuredResult(payload, { text: renderRepoList(payload) });
   },
 });
+
+registerToolDefinition(listReposTool);
 
 // ============================================================================
 // Info
@@ -97,12 +105,12 @@ export const getRepoInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: repoInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.REPO },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall("getRepo", () => komodo.client.read("GetRepo", { repo: args.repo }), abortSignal);
+    const result = redactObject(await wrapApiCall("getRepo", () => komodo.client.read("GetRepo", { repo: args.repo })));
     const link = tryRegisterResource({
       ctx: { sessionId },
       category: "info",
@@ -122,12 +130,14 @@ export const getRepoInfoTool = defineTool({
       ...(result.config?.branch ? { branch: result.config.branch } : {}),
     };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderRepoInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getRepoInfoTool);
 
 // ============================================================================
 // Lifecycle (consolidated action)
@@ -150,22 +160,22 @@ export const repoActionTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.REPO },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = REPO_ACTION_API_MAP[args.action];
     const update = await wrapExecuteAndPoll(
       `${args.action} repo '${args.repo}'`,
       // @sdk-constraint — SDK execute() type uses literal-keyed unions; runtime accepts mapped string
       () => komodo.client.execute(apiAction as "CloneRepo", { repo: args.repo }),
-      abortSignal,
-      reportProgress,
     );
     const payload = buildActionResult(update, args.action, "repo", args.repo);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(repoActionTool);
 
 // ============================================================================
 // CRUD
@@ -183,19 +193,17 @@ export const applyRepoTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.REPO },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
       const name = args.name;
       const repoConfig: Record<string, unknown> = { ...args.config };
-      const result = await wrapApiCall(
-        "createRepo",
-        () => komodo.client.write("CreateRepo", { name, config: repoConfig }),
-        abortSignal,
+      const result = await wrapApiCall("createRepo", () =>
+        komodo.client.write("CreateRepo", { name, config: repoConfig }),
       );
       const built = buildApplyResult("create", "repo", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.repo) throw AppErrorFactory.validation.fieldRequired("repo");
     const repoId = args.repo;
@@ -203,12 +211,13 @@ export const applyRepoTool = defineTool({
       "updateRepo",
       // @type-variance — Zod-inferred optional fields (`T | undefined`) → SDK `Partial<RepoConfig>` (`T`).
       () => komodo.client.write("UpdateRepo", { id: repoId, config: args.config as Types._PartialRepoConfig }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "repo", repoId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyRepoTool);
 
 export const deleteRepoTool = defineTool({
   name: "komodo_repo_delete",
@@ -218,16 +227,15 @@ export const deleteRepoTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.REPO },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteRepo",
-      () => komodo.client.write("DeleteRepo", { id: args.repo }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteRepo", () => komodo.client.write("DeleteRepo", { id: args.repo }));
     const built = buildDeleteResult("repo", args.repo, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteRepoTool);

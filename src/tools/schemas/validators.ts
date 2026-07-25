@@ -4,10 +4,15 @@
  * Cross-domain validators for resource IDs and names.
  * Used by container, server, deployment, and stack tools.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/validators.ts) — `z`
+ * imported from `zod` directly rather than the reference's
+ * `mcp-server-framework` re-export, which we don't depend on.
+ *
  * @module tools/schemas/validators
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { VALIDATION_LIMITS } from "../../config/index.js";
 
 /** Validates server ID format (MongoDB ObjectId or human-readable name) */

@@ -3,6 +3,9 @@
  *
  * Parsing and formatting of komodo_client rejections and Error cause chains.
  *
+ * Ported verbatim from the reference repo — this file is self-contained
+ * (only imports from ./classes.js, no mcp-server-framework dependency).
+ *
  * @module errors/extraction
  */
 
@@ -44,7 +47,7 @@ export function extractKomodoError(error: unknown): string {
       const result = e.result as Record<string, unknown>;
       if (typeof result.error === "string") return result.error;
     }
-    if (typeof e.status === "number") return `HTTP ${e.status}`;
+    if (typeof e.status === "number") return `HTTP ${String(e.status)}`;
   }
   return String(error);
 }

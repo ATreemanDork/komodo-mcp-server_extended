@@ -5,22 +5,38 @@
  * Supports listing, creating, and deleting API keys for the
  * currently authenticated user.
  *
+ * Tools (3):
+ * - `komodo_user_list_api_keys`   — list API keys
+ * - `komodo_user_create_api_key`  — create a new API key
+ * - `komodo_user_delete_api_key`  — delete an API key (resolved by name or key id)
+ *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/user.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/user
  */
 
-import { defineTool, structured } from "mcp-server-framework";
 import type { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import { requireClient, wrapApiCall, renderApiKeyList, renderApiKeyCreated, paginate } from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { renderApiKeyList, renderApiKeyCreated } from "./renderers/user.js";
 import {
   listApiKeysOutputSchema,
   createApiKeyOutputSchema,
   createApiKeyInputSchema,
   deleteApiKeyInputSchema,
   deleteApiKeyOutputSchema,
-  paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/user.js";
+import { paginationInputSchema } from "./schemas/shared.js";
 
 type ApiKey = Types.ApiKey;
 
@@ -38,9 +54,9 @@ export const listApiKeysTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.USER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const keys = await wrapApiCall("listApiKeys", () => komodo.client.read("ListApiKeys", {}), abortSignal);
+    const keys = await wrapApiCall("listApiKeys", () => komodo.client.read("ListApiKeys", {}));
 
     const allItems = keys.map((k: ApiKey) => ({
       name: k.name,
@@ -51,9 +67,11 @@ export const listApiKeysTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderApiKeyList(payload) });
+    return structuredResult(payload, { text: renderApiKeyList(payload) });
   },
 });
+
+registerToolDefinition(listApiKeysTool);
 
 // ============================================================================
 // Create API Key
@@ -68,17 +86,21 @@ export const createApiKeyTool = defineTool({
   input: createApiKeyInputSchema,
   output: createApiKeyOutputSchema,
   annotations: { readOnlyHint: false },
+  // Value-reveal tool: the response hands back a live API-key `secret` that
+  // transits the model/gateway channel (issue #160). Gated at the critical
+  // tier so the secret only ever transits on an explicit confirmed call — the
+  // deployer decides whether to grant the agent this capability or restrict
+  // it. Redaction is not an option here: the secret IS the deliverable.
+  guardrail: "critical",
   _meta: { category: ToolCategories.USER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
 
     const expires = args.expires_in_days > 0 ? Date.now() + args.expires_in_days * 24 * 60 * 60 * 1000 : 0;
 
-    const result = await wrapApiCall(
-      "createApiKey",
-      () => komodo.client.auth.manage("CreateApiKey", { name: args.name, expires }),
-      abortSignal,
+    const result = await wrapApiCall("createApiKey", () =>
+      komodo.client.auth.manage("CreateApiKey", { name: args.name, expires }),
     );
 
     const payload = {
@@ -87,9 +109,11 @@ export const createApiKeyTool = defineTool({
       secret: result.secret,
       expires,
     };
-    return structured(payload, { text: renderApiKeyCreated(payload) });
+    return structuredResult(payload, { text: renderApiKeyCreated(payload) });
   },
 });
+
+registerToolDefinition(createApiKeyTool);
 
 // ============================================================================
 // Delete API Key
@@ -106,9 +130,10 @@ export const deleteApiKeyTool = defineTool({
     readOnlyHint: false,
     destructiveHint: true,
   },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.USER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const input = args.name_or_key;
 
@@ -120,7 +145,7 @@ export const deleteApiKeyTool = defineTool({
     if (input.startsWith("K_")) {
       resolvedKey = input;
     } else {
-      const keys = await wrapApiCall("listApiKeysForDelete", () => komodo.client.read("ListApiKeys", {}), abortSignal);
+      const keys = await wrapApiCall("listApiKeysForDelete", () => komodo.client.read("ListApiKeys", {}));
       const matches = keys.filter((k) => k.name === input);
 
       if (matches.length === 0) {
@@ -137,18 +162,16 @@ export const deleteApiKeyTool = defineTool({
       resolvedName = match.name;
     }
 
-    await wrapApiCall(
-      "deleteApiKey",
-      () => komodo.client.auth.manage("DeleteApiKey", { key: resolvedKey }),
-      abortSignal,
-    );
+    await wrapApiCall("deleteApiKey", () => komodo.client.auth.manage("DeleteApiKey", { key: resolvedKey }));
 
     const label = resolvedName
       ? `**Name:** ${resolvedName}\n\n**Key:** \`${resolvedKey}\``
       : `**Key:** \`${resolvedKey}\``;
-    return structured(
-      { deleted: true, key_id: resolvedKey, ...(resolvedName && { name: resolvedName }) },
+    return structuredResult(
+      { deleted: true, key_id: resolvedKey, ...(resolvedName !== undefined && { name: resolvedName }) },
       { text: `✅ API key deleted successfully.\n\n${label}` },
     );
   },
 });
+
+registerToolDefinition(deleteApiKeyTool);

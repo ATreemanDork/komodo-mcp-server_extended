@@ -3,10 +3,18 @@
  *
  * Zod schemas for Komodo Build resources (`komodo_build_*` tools).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/build.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework dependency
+ * re-export, which we don't depend on. `buildIdSchema` did not exist
+ * anywhere in this repo's already-ported `tools/schemas/validators.ts` —
+ * defined here per the dispatch contract's rule 7 (ID schemas not already
+ * in `validators.ts` live in the domain's own schema file).
+ *
  * @module tools/schemas/build
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { resourceNameSchema } from "./validators.js";
 import {
   actionResultSchema,
@@ -119,12 +127,6 @@ export const buildConfigSchema = z
   })
   .describe("Build configuration — only specify fields you want to set or update");
 
-/**
- * Discriminated input for `komodo_build_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Build (`name` required)
- * - `action: "update"` — PATCH-style update of an existing Build (`build` required)
- */
 /**
  * Input for `komodo_build_apply` (create-or-update).
  *

@@ -3,19 +3,36 @@
  *
  * Zod schemas for Komodo Variables (`komodo_variable_*` tools).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/variable.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on.
+ *
  * @module tools/schemas/variable
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { pageOutputSchema } from "./shared.js";
 
-export const variableNameSchema = z.string().min(1).describe("Variable name (unique key)");
+// Mirrors Komodo Core's own validation (bin/core/src/helpers/validations.rs,
+// `validate_variable_name`) — checked client-side so a bad name fails fast
+// with a clear message instead of an opaque API 400.
+export const variableNameSchema = z
+  .string()
+  .min(1)
+  .regex(
+    /^[a-zA-Z_][a-zA-Z0-9_]*$/,
+    "Variable name must start with a letter or underscore and contain only letters, digits, and underscores (no hyphens)",
+  )
+  .describe("Variable name (unique key) — letters, digits, underscores only; must start with a letter or underscore");
 
 export const variableSummarySchema = z.object({
   name: z.string().describe("Variable name"),
   value: z
     .string()
-    .describe("Variable value — empty string when the variable is marked as secret and the user lacks read access"),
+    .describe(
+      'Variable value — the literal string "[redacted]" when the variable is marked secret; this server masks secret values unconditionally, regardless of caller',
+    ),
   description: z.string().optional().describe("Optional human-readable description"),
   is_secret: z.boolean().optional().describe("True if the value is treated as a secret"),
 });

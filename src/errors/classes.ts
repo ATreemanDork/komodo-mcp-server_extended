@@ -1,14 +1,20 @@
 /**
  * Komodo Error Classes
  *
- * Application-specific error classes extending the framework's AppError.
+ * Application-specific error classes extending the local AppError.
+ *
+ * Ported near-verbatim from the reference repo's errors/classes.ts. Only
+ * the imports changed: `AppError`/`BaseErrorOptions` now come from local
+ * ./app-error.js and `ErrorCodes`/`HttpStatus` from local ./error-codes.js
+ * instead of mcp-server-framework(/errors). `ErrorCode` already imported
+ * directly from @modelcontextprotocol/sdk in the reference — unchanged.
  *
  * @module errors/classes
  */
 
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { AppError, type BaseErrorOptions } from "mcp-server-framework";
-import { ErrorCodes, HttpStatus } from "mcp-server-framework/errors";
+import { AppError, type BaseErrorOptions } from "./app-error.js";
+import { ErrorCodes, HttpStatus } from "./error-codes.js";
 import { getAppMessage } from "./messages.js";
 
 // ============================================================================
@@ -113,7 +119,7 @@ export class ConnectionError extends AppError {
 
   static timeout(target: string, timeoutMs?: number): ConnectionError {
     const message = timeoutMs
-      ? `${getAppMessage("CONNECTION_TIMEOUT", { target })} (after ${timeoutMs}ms)`
+      ? `${getAppMessage("CONNECTION_TIMEOUT", { target })} (after ${String(timeoutMs)}ms)`
       : getAppMessage("CONNECTION_TIMEOUT", { target });
     return new ConnectionError(message, target, {
       statusCode: HttpStatus.GATEWAY_TIMEOUT,

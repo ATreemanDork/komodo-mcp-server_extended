@@ -4,10 +4,15 @@
  * Zod schemas for the bootstrap (`komodo_configure`) and `komodo_health_check`
  * tool outputs.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/config.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/config
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 
 /**
  * Input of `komodo_configure`.
@@ -18,7 +23,7 @@ import { z } from "mcp-server-framework";
  * - `jwtToken`
  *
  * Cross-field validation (exactly one method) is performed in the handler so
- * Zod-to-JSON-Schema emits a flat object that MCP Inspector can render.
+ * the emitted JSON Schema is a flat object that MCP Inspector can render.
  */
 export const configureInputSchema = z
   .object({
@@ -35,7 +40,7 @@ export const configureInputSchema = z
  * Output of `komodo_configure`.
  *
  * Returned on the success and partial-success branches. Validation failures
- * are signalled via `error(...)` and do not carry structured content.
+ * are signalled via `errorResult(...)` and do not carry structured content.
  */
 export const configureOutputSchema = z
   .object({

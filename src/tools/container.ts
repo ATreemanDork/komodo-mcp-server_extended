@@ -11,11 +11,24 @@
  * - `komodo_container_search_logs` — keyword search across logs
  * - `komodo_container_action`      — consolidated lifecycle (start/stop/restart/pause/unpause)
  *
+ * No apply/delete tool — containers aren't created/deleted directly through
+ * this API, only via their owning deployment/stack.
+ *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/container.ts) onto this repo's
+ * own `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/container
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
-import { Types } from "komodo_client";
+import { z } from "zod";
+import type { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import {
   PARAM_DESCRIPTIONS,
   CONTAINER_LOGS_DEFAULTS,
@@ -25,32 +38,27 @@ import {
   ToolScopes,
   config,
 } from "../config/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { redactObject } from "../utils/redact.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
 import {
-  requireClient,
-  wrapApiCall,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  paginate,
   renderContainerList,
   renderContainerInspect,
   renderContainerLogs,
   renderContainerSearchLogs,
-  renderActionResult,
-  tryRegisterResource,
-} from "../utils/index.js";
+} from "./renderers/container.js";
+import { renderActionResult } from "./renderers/_shared.js";
+import { serverIdSchema, containerNameSchema } from "./schemas/validators.js";
 import {
   containerActionInputSchema,
-  serverIdSchema,
-  containerNameSchema,
   containerListOutputSchema,
   containerInspectOutputSchema,
   containerLogsOutputSchema,
   containerSearchLogsOutputSchema,
-  actionResultSchema,
-  inlineFullInputSchema,
-  paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/container.js";
+import { actionResultSchema, inlineFullInputSchema, paginationInputSchema } from "./schemas/shared.js";
 
 type ContainerListItem = Types.ContainerListItem;
 type Log = Types.Log;
@@ -69,15 +77,13 @@ export const listContainersTool = defineTool({
     })
     .merge(paginationInputSchema),
   output: containerListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.CONTAINER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const containers = await wrapApiCall(
-      "listContainers",
-      () => komodo.client.read("ListDockerContainers", { server: args.server }),
-      abortSignal,
+    const containers = await wrapApiCall("listContainers", () =>
+      komodo.client.read("ListDockerContainers", { server: args.server }),
     );
 
     const allItems = containers.map((c: ContainerListItem) => ({
@@ -88,9 +94,11 @@ export const listContainersTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderContainerList(payload) });
+    return structuredResult(payload, { text: renderContainerList(payload) });
   },
 });
+
+registerToolDefinition(listContainersTool);
 
 // ============================================================================
 // Inspect
@@ -107,15 +115,15 @@ export const inspectContainerTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: containerInspectOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.CONTAINER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "inspectContainer",
-      () => komodo.client.read("InspectDockerContainer", { server: args.server, container: args.container }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("inspectContainer", () =>
+        komodo.client.read("InspectDockerContainer", { server: args.server, container: args.container }),
+      ),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -130,12 +138,14 @@ export const inspectContainerTool = defineTool({
     const payload = link
       ? { summary: { name: args.container }, resourceLink: link }
       : { summary: { name: args.container }, inspect: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderContainerInspect(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(inspectContainerTool);
 
 // ============================================================================
 // Logs
@@ -164,22 +174,19 @@ export const getContainerLogsTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: containerLogsOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.CONTAINER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
 
-    const result: Log = await wrapApiCall(
-      "getContainerLogs",
-      () =>
-        komodo.client.read("GetContainerLog", {
-          server: args.server,
-          container: args.container,
-          tail: args.tail,
-          timestamps: args.timestamps,
-        }),
-      abortSignal,
+    const result: Log = await wrapApiCall("getContainerLogs", () =>
+      komodo.client.read("GetContainerLog", {
+        server: args.server,
+        container: args.container,
+        tail: args.tail,
+        timestamps: args.timestamps,
+      }),
     );
 
     const stdout = result.stdout;
@@ -208,12 +215,14 @@ export const getContainerLogsTool = defineTool({
           ...(stdout ? { stdout } : {}),
           ...(stderr ? { stderr } : {}),
         };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderContainerLogs(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getContainerLogsTool);
 
 // ============================================================================
 // Search Logs
@@ -243,22 +252,19 @@ export const searchContainerLogsTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: containerSearchLogsOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.CONTAINER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
 
-    const result: Log = await wrapApiCall(
-      "searchContainerLogs",
-      () =>
-        komodo.client.read("GetContainerLog", {
-          server: args.server,
-          container: args.container,
-          tail: args.tail,
-          timestamps: false,
-        }),
-      abortSignal,
+    const result: Log = await wrapApiCall("searchContainerLogs", () =>
+      komodo.client.read("GetContainerLog", {
+        server: args.server,
+        container: args.container,
+        tail: args.tail,
+        timestamps: false,
+      }),
     );
 
     const stdoutLines = result.stdout
@@ -284,14 +290,14 @@ export const searchContainerLogsTool = defineTool({
             content: matches.map((m) => `[${m.stream}] ${m.line}`).join("\n"),
             ttlMs: config.KOMODO_RESOURCE_TTL_LOGS,
             inlineFull: args.inline_full,
-            description: `${matches.length} matching log line(s) for query "${args.query}" in ${args.container}`,
+            description: `${String(matches.length)} matching log line(s) for query "${args.query}" in ${args.container}`,
           })
         : null;
 
     const payload = link
       ? { summary: { name: args.container }, matches: [], resourceLink: link }
       : { summary: { name: args.container }, matches };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderContainerSearchLogs({
         summary: payload.summary,
         matches,
@@ -301,6 +307,8 @@ export const searchContainerLogsTool = defineTool({
     });
   },
 });
+
+registerToolDefinition(searchContainerLogsTool);
 
 // ============================================================================
 // Lifecycle
@@ -329,18 +337,17 @@ export const containerActionTool = defineTool({
   annotations: { readOnlyHint: false, idempotentHint: false },
   _meta: { category: ToolCategories.CONTAINER },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = CONTAINER_ACTION_API_MAP[args.action];
-    const update = await wrapExecuteAndPoll(
-      `${args.action}Container`,
-      () => komodo.client.execute(apiAction, { server: args.server, container: args.container }),
-      abortSignal,
-      reportProgress,
+    const update = await wrapExecuteAndPoll(`${args.action}Container`, () =>
+      komodo.client.execute(apiAction, { server: args.server, container: args.container }),
     );
     const payload = buildActionResult(update, args.action, "container", args.container, args.server);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(containerActionTool);

@@ -9,35 +9,59 @@
  * - `komodo_alerter_apply`  — create-or-update (discriminated by `action`)
  * - `komodo_alerter_delete` — unregister an alerter
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/alerter.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/alerter
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  paginate,
-  renderAlerterList,
-  renderAlerterInfo,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { redactObject, REDACTED } from "../utils/redact.js";
+import { renderAlerterList, renderAlerterInfo } from "./renderers/alerter.js";
 import {
   alerterIdSchema,
   alerterListOutputSchema,
   alerterInfoOutputSchema,
   alerterApplyInputSchema,
+} from "./schemas/alerter.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type AlerterListItem = Types.AlerterListItem;
+
+/**
+ * Redact an Alerter for output. `config.endpoint.params` carries provider
+ * webhook secrets under non-key-signalled names (e.g. Slack/Discord `url`
+ * embeds a token), so `redactObject` alone misses them — mask every value in
+ * that params object, then let `redactObject` handle the key-name-signalled
+ * fields elsewhere. `config.endpoint.type` and other fields stay intact.
+ */
+function redactAlerter(a: Types.Alerter): Types.Alerter {
+  const redacted = redactObject(a);
+  const params = redacted.config?.endpoint?.params as Record<string, unknown> | undefined;
+  if (params) {
+    for (const key of Object.keys(params)) params[key] = REDACTED;
+  }
+  return redacted;
+}
 
 // ============================================================================
 // List
@@ -52,9 +76,9 @@ export const listAlertersTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.ALERTER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const alerters = await wrapApiCall("listAlerters", () => komodo.client.read("ListAlerters", {}), abortSignal);
+    const alerters = await wrapApiCall("listAlerters", () => komodo.client.read("ListAlerters", {}));
 
     const allItems = alerters.map((a: AlerterListItem) => ({
       id: a.id,
@@ -65,9 +89,11 @@ export const listAlertersTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderAlerterList(payload) });
+    return structuredResult(payload, { text: renderAlerterList(payload) });
   },
 });
+
+registerToolDefinition(listAlertersTool);
 
 // ============================================================================
 // Info
@@ -76,7 +102,7 @@ export const listAlertersTool = defineTool({
 export const getAlerterInfoTool = defineTool({
   name: "komodo_alerter_info",
   description:
-    "Get the full Komodo Alerter resource (endpoint configuration, alert filters, maintenance windows). Sensitive fields like webhook URLs are offloaded via a session-scoped resource link when available.",
+    "Get the full Komodo Alerter resource (endpoint configuration, alert filters, maintenance windows). Sensitive fields like webhook URLs are masked to [redacted] before output — the resource link never carries the raw value; a session-scoped resource link holds the full masked resource when available.",
   input: z
     .object({
       alerter: alerterIdSchema.describe("Alerter id or name"),
@@ -86,12 +112,10 @@ export const getAlerterInfoTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.ALERTER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getAlerter",
-      () => komodo.client.read("GetAlerter", { alerter: args.alerter }),
-      abortSignal,
+    const result = redactAlerter(
+      await wrapApiCall("getAlerter", () => komodo.client.read("GetAlerter", { alerter: args.alerter })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -110,12 +134,14 @@ export const getAlerterInfoTool = defineTool({
       ...(result.config?.endpoint?.type ? { endpoint_type: result.config.endpoint.type } : {}),
     };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderAlerterInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getAlerterInfoTool);
 
 // ============================================================================
 // CRUD
@@ -133,7 +159,7 @@ export const applyAlerterTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.ALERTER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
@@ -146,10 +172,9 @@ export const applyAlerterTool = defineTool({
             name,
             config: (args.config ?? {}) as unknown as Types._PartialAlerterConfig,
           }),
-        abortSignal,
       );
-      const built = buildApplyResult("create", "alerter", name, result);
-      return structured(built.payload, { text: built.text });
+      const built = buildApplyResult("create", "alerter", name, redactAlerter(result));
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.alerter) throw AppErrorFactory.validation.fieldRequired("alerter");
     const alerterId = args.alerter;
@@ -161,12 +186,13 @@ export const applyAlerterTool = defineTool({
           id: alerterId,
           config: args.config as unknown as Types._PartialAlerterConfig,
         }),
-      abortSignal,
     );
-    const built = buildApplyResult("update", "alerter", alerterId, result);
-    return structured(built.payload, { text: built.text });
+    const built = buildApplyResult("update", "alerter", alerterId, redactAlerter(result));
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyAlerterTool);
 
 export const deleteAlerterTool = defineTool({
   name: "komodo_alerter_delete",
@@ -176,16 +202,15 @@ export const deleteAlerterTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.ALERTER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteAlerter",
-      () => komodo.client.write("DeleteAlerter", { id: args.alerter }),
-      abortSignal,
-    );
-    const built = buildDeleteResult("alerter", args.alerter, result);
-    return structured(built.payload, { text: built.text });
+    const result = await wrapApiCall("deleteAlerter", () => komodo.client.write("DeleteAlerter", { id: args.alerter }));
+    const built = buildDeleteResult("alerter", args.alerter, redactAlerter(result));
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteAlerterTool);

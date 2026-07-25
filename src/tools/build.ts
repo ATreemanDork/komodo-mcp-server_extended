@@ -11,28 +11,32 @@
  * - `komodo_build_apply`  — create-or-update (discriminated by `action`)
  * - `komodo_build_delete` — unregister a build
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/build.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing, explicit `String()`
+ * coercion for numeric template interpolation) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/build
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  paginate,
-  renderBuildList,
-  renderBuildInfo,
-  renderBuildLogs,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { redactObject } from "../utils/redact.js";
+import { renderBuildList, renderBuildInfo, renderBuildLogs } from "./renderers/build.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   buildIdSchema,
   buildListOutputSchema,
@@ -41,11 +45,13 @@ import {
   buildActionInputSchema,
   buildApplyInputSchema,
   buildLogsOutputSchema,
+} from "./schemas/build.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type BuildListItem = Types.BuildListItem;
 type Update = Types.Update;
@@ -53,7 +59,7 @@ type Update = Types.Update;
 function formatVersion(v?: { major: number; minor: number; patch: number }): string | undefined {
   if (!v) return undefined;
   if (v.major === 0 && v.minor === 0 && v.patch === 0) return undefined;
-  return `${v.major}.${v.minor}.${v.patch}`;
+  return `${String(v.major)}.${String(v.minor)}.${String(v.patch)}`;
 }
 
 // ============================================================================
@@ -66,12 +72,12 @@ export const listBuildsTool = defineTool({
     "List all builds registered in Komodo. Shows build id, name, current state (Building/Ok/Failed/Unknown), version, attached builder, source repo and branch.",
   input: paginationInputSchema,
   output: buildListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const builds = await wrapApiCall("listBuilds", () => komodo.client.read("ListBuilds", {}), abortSignal);
+    const builds = await wrapApiCall("listBuilds", () => komodo.client.read("ListBuilds", {}));
 
     const allItems = builds.map((b: BuildListItem) => {
       const version = formatVersion(b.info.version);
@@ -89,9 +95,11 @@ export const listBuildsTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderBuildList(payload) });
+    return structuredResult(payload, { text: renderBuildList(payload) });
   },
 });
+
+registerToolDefinition(listBuildsTool);
 
 // ============================================================================
 // Info
@@ -107,15 +115,13 @@ export const getBuildInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: buildInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getBuild",
-      () => komodo.client.read("GetBuild", { build: args.build }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getBuild", () => komodo.client.read("GetBuild", { build: args.build })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -127,22 +133,25 @@ export const getBuildInfoTool = defineTool({
       inlineFull: args.inline_full,
       description: `Full build resource for ${result.name}`,
     });
+    const version = formatVersion(result.config?.version);
     const summary = {
       id: result._id?.$oid ?? args.build,
       name: result.name,
-      ...(formatVersion(result.config?.version) ? { version: formatVersion(result.config?.version) } : {}),
+      ...(version ? { version } : {}),
       ...(result.config?.builder_id ? { builder_id: result.config.builder_id } : {}),
       ...(result.config?.repo ? { repo: result.config.repo } : {}),
       ...(result.config?.branch ? { branch: result.config.branch } : {}),
       ...(result.info?.last_built_at ? { last_built_at: result.info.last_built_at } : {}),
     };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderBuildInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getBuildInfoTool);
 
 // ============================================================================
 // Action (run / cancel)
@@ -163,18 +172,15 @@ export const buildActionTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = BUILD_ACTION_API_MAP[args.action];
     if (args.action === "run") {
-      const update = await wrapExecuteAndPoll(
-        `run build '${args.build}'`,
-        () => komodo.client.execute(apiAction as "RunBuild", { build: args.build }),
-        abortSignal,
-        reportProgress,
+      const update = await wrapExecuteAndPoll(`run build '${args.build}'`, () =>
+        komodo.client.execute(apiAction as "RunBuild", { build: args.build }),
       );
       const payload = buildActionResult(update, "run", "build", args.build);
-      return structured(payload, {
+      return structuredResult(payload, {
         text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
       });
     }
@@ -182,14 +188,15 @@ export const buildActionTool = defineTool({
       `cancel build '${args.build}'`,
       // @sdk-constraint — SDK execute() type uses literal-keyed unions; runtime accepts mapped string
       () => komodo.client.execute(apiAction as "CancelBuild", { build: args.build }),
-      abortSignal,
     );
     const payload = buildActionResult(update, "cancel", "build", args.build);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(buildActionTool);
 
 // ============================================================================
 // Logs
@@ -205,15 +212,13 @@ export const getBuildLogsTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: buildLogsOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const update: Update = await wrapApiCall(
-      "getBuildUpdate",
-      () => komodo.client.read("GetUpdate", { id: args.update_id }),
-      abortSignal,
+    const update: Update = await wrapApiCall("getBuildUpdate", () =>
+      komodo.client.read("GetUpdate", { id: args.update_id }),
     );
 
     const buildName = update.target.id || args.update_id;
@@ -272,12 +277,14 @@ export const getBuildLogsTool = defineTool({
           })),
         };
 
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderBuildLogs(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getBuildLogsTool);
 
 // ============================================================================
 // Apply / Delete
@@ -295,7 +302,7 @@ export const applyBuildTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
@@ -308,10 +315,9 @@ export const applyBuildTool = defineTool({
             name,
             config: (args.config ?? {}) as Types._PartialBuildConfig,
           }),
-        abortSignal,
       );
       const built = buildApplyResult("create", "build", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.build) throw AppErrorFactory.validation.fieldRequired("build");
     const buildId = args.build;
@@ -323,12 +329,13 @@ export const applyBuildTool = defineTool({
           id: buildId,
           config: args.config as Types._PartialBuildConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "build", buildId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyBuildTool);
 
 export const deleteBuildTool = defineTool({
   name: "komodo_build_delete",
@@ -338,16 +345,15 @@ export const deleteBuildTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.BUILD },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteBuild",
-      () => komodo.client.write("DeleteBuild", { id: args.build }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteBuild", () => komodo.client.write("DeleteBuild", { id: args.build }));
     const built = buildDeleteResult("build", args.build, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteBuildTool);

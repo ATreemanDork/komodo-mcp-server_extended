@@ -1,14 +1,22 @@
 {
-  "name": "komodo-mcp-server",
-  "version": "1.4.1",
-  "mcpName": "io.github.MP-Tool/komodo-mcp-server",
-  "description": "Model Context Protocol Server for Komodo (Container Manager)",
+  "name": "komodo-mcp-server_extended",
+  "version": "2.0.0",
+  "description": "Comprehensive Model Context Protocol server for the Komodo container-orchestration API",
   "type": "module",
   "main": "build/index.js",
   "bin": {
-    "komodo-mcp-server": "build/index.js"
+    "komodo-mcp": "build/index.js"
   },
   "types": "build/index.d.ts",
+  "mcpName": "io.github.ATreemanDork/komodo-mcp-server_extended",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ATreemanDork/komodo-mcp-server_extended.git"
+  },
+  "homepage": "https://github.com/ATreemanDork/komodo-mcp-server_extended#readme",
+  "bugs": {
+    "url": "https://github.com/ATreemanDork/komodo-mcp-server_extended/issues"
+  },
   "scripts": {
     "build": "tsc",
     "build:prod": "tsc --project tsconfig.prod.json",
@@ -21,8 +29,9 @@
     "lint:fix": "eslint 'src/**/*.ts' --fix",
     "format": "prettier --write 'src/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts'",
-    "docker:build": "docker build --build-arg VERSION=$npm_package_version --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) --build-arg COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo 'unknown') -t komodo-mcp-server:$npm_package_version -t komodo-mcp-server:latest .",
-    "docker:build-no-cache": "docker build --no-cache --build-arg VERSION=$npm_package_version --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) --build-arg COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo 'unknown') -t komodo-mcp-server:$npm_package_version -t komodo-mcp-server:latest ."
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "node --env-file=.env node_modules/.bin/vitest run --config vitest.integration.config.ts"
   },
   "keywords": [
     "mcp",
@@ -36,36 +45,35 @@
     "automation",
     "typescript"
   ],
-  "author": "Marcel Pfennig",
+  "author": "ATreemanDork <albantreeman@gmail.com>",
+  "contributors": [
+    "Marcel Pfennig / MP-Tool (original work: github.com/MP-Tool/komodo-mcp-server)"
+  ],
   "license": "GPL-3.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MP-Tool/komodo-mcp-server.git"
-  },
-  "bugs": {
-    "url": "https://github.com/MP-Tool/komodo-mcp-server/issues"
-  },
   "engines": {
     "node": ">=20.0.0"
   },
   "files": [
     "build/**/*.js",
     "build/**/*.d.ts",
-    "build/VERSION",
     "README.md",
-    "LICENSE.txt",
-    "CHANGELOG.md"
+    "FORK_NOTES.md",
+    "LICENSE.txt"
   ],
   "dependencies": {
-    "komodo_client": "^2.0.0",
-    "mcp-server-framework": "^1.1.2"
-  },
-  "overrides": {
-    "zod": "$zod"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "komodo_client": "^2.1.1",
+    "zod": "^3.25.0",
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "helmet": "^8.0.0",
+    "express-rate-limit": "^7.5.0",
+    "pino": "^9.5.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@types/express": "^5.0.0",
+    "@types/cors": "^2.8.17",
     "@types/node": "^25.0.9",
     "eslint": "^10.0.3",
     "eslint-config-prettier": "^10.1.8",
@@ -74,6 +82,6 @@
     "prettier": "^3.7.4",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.1",
-    "zod": "^3.25.0"
+    "vitest": "^3.0.0"
   }
 }

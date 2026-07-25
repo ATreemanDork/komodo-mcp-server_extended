@@ -1,0 +1,31 @@
+# Example LiteLLM MCP gateway config entry for this server (Streamable HTTP).
+#
+# DOCUMENTATION ONLY — a starting point for wiring this MCP server in behind a
+# LiteLLM proxy. Adjust to your own deployment before using.
+#
+# Schema confirmed against https://docs.litellm.ai/docs/mcp (LiteLLM describes
+# MCP protocol version 2025-11-25 as of v1.80.18+): MCP servers are declared
+# under a top-level `mcp_servers:` key, each entry taking `url`, `transport`
+# ("http" for Streamable HTTP, "sse", or "stdio" with `command`/`args`), plus
+# optional `description`, `auth_type`/`auth_value`, `static_headers`,
+# `extra_headers`. Re-check the docs page before wiring this up — LiteLLM's
+# config schema has changed across versions before.
+
+mcp_servers:
+  komodo_mcp:
+    # Replace with wherever this server actually runs (a container reachable
+    # from the LiteLLM proxy's network, not necessarily localhost). Matches
+    # src/server/transports/http.ts's POST/GET/DELETE /mcp endpoint, started
+    # via MCP_TRANSPORT=http.
+    url: "http://127.0.0.1:8000/mcp"
+    transport: "http"
+    description: "Komodo container-orchestration MCP server."
+
+    # No auth_type/auth_value is configured here on purpose: this server's HTTP
+    # transport has no bearer/API-key gate of its own — the guardrail layer
+    # (dry-run/confirm tokens for destructive tools) guards individual tool
+    # calls, not transport-level access. Before registering this against a real
+    # gateway, decide explicitly whether LiteLLM-side auth (auth_type/
+    # auth_value/static_headers — see the docs URL above) or a reverse-proxy
+    # gate is the right boundary. Do not leave an unauthenticated,
+    # destructive-tool-capable MCP server reachable without making that call.

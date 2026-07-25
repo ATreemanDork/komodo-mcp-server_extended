@@ -1,32 +1,43 @@
 /**
  * Application Error Factory
  *
- * Centralized error creation extending the framework factory with Komodo-specific errors.
+ * Centralized error creation for Komodo-specific errors.
+ *
+ * DEVIATION: the reference factory.ts also re-exported framework-level
+ * namespaces (mcp, session, transport, validation, configuration,
+ * operation, cancellation, internal, registry, normalize, isAppError) by
+ * delegating to mcp-server-framework's `FrameworkErrorFactory`. None of
+ * that is used by client.ts, and rebuilding that whole error taxonomy
+ * (McpProtocolError, SessionError, TransportError, ValidationError, etc.)
+ * belongs to the src/mcp//src/server bootstrap built in later steps, not
+ * this one — so this port keeps only the Komodo-specific namespaces
+ * (api, connection, auth, notFound, client, getMessage). Add the
+ * framework-equivalent namespaces here (or in a sibling factory) once a
+ * later step actually needs them.
+ *
+ * FOLD-IN: `validation` added — the reference's
+ * apply-tool required-field checks (`AppErrorFactory.validation.
+ * fieldRequired(...)`) need it. Ported from the framework's `ValidationError`
+ * (see `./validation.js`), not stubbed.
  *
  * @module errors/factory
  */
 
-import { FrameworkErrorFactory } from "mcp-server-framework";
-import { type ZodError } from "zod";
+import type { ZodError } from "zod";
 import { ApiError, ConnectionError, AuthenticationError, NotFoundError, ClientNotConfiguredError } from "./classes.js";
 import { getAppMessage } from "./messages.js";
+import { ValidationError } from "./validation.js";
 
 export const AppErrorFactory = {
-  // Framework errors (delegated)
-  mcp: FrameworkErrorFactory.mcp,
-  session: FrameworkErrorFactory.session,
-  transport: FrameworkErrorFactory.transport,
   validation: {
-    ...FrameworkErrorFactory.validation,
-    fromZodError: (error: ZodError, message?: string) => FrameworkErrorFactory.validation.fromZodError(error, message),
+    fieldRequired: (field: string) => ValidationError.fieldRequired(field),
+    fieldInvalid: (field: string, value?: unknown) => ValidationError.fieldInvalid(field, value),
+    fieldTypeMismatch: (field: string, expectedType: string) => ValidationError.fieldTypeMismatch(field, expectedType),
+    fieldMin: (field: string, min: number) => ValidationError.fieldMin(field, min),
+    fieldMax: (field: string, max: number) => ValidationError.fieldMax(field, max),
+    fieldPattern: (field: string) => ValidationError.fieldPattern(field),
+    fromZodError: (error: ZodError, message?: string) => ValidationError.fromZodError(error, message),
   },
-  configuration: FrameworkErrorFactory.configuration,
-  operation: FrameworkErrorFactory.operation,
-  cancellation: FrameworkErrorFactory.cancellation,
-  internal: FrameworkErrorFactory.internal,
-  registry: FrameworkErrorFactory.registry,
-  normalize: FrameworkErrorFactory.normalize,
-  isAppError: FrameworkErrorFactory.isAppError,
 
   // Komodo-specific errors
   api: {

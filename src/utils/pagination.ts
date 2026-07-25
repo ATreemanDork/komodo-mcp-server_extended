@@ -6,6 +6,10 @@
  * back to offset 0 silently — callers should not be able to crash a list
  * tool by passing garbage.
  *
+ * Ported verbatim from the reference repo
+ * (references/komodo-mcp-server/src/utils/pagination.ts) — no framework
+ * dependency to remove.
+ *
  * @module utils/pagination
  */
 

@@ -4,11 +4,16 @@
  * Thin wrapper around komodo_client with local connection tracking,
  * Auth Strategy Pattern, and automatic reconnection.
  *
+ * Ported near-verbatim from the reference repo — the only change is the
+ * logger import, which now points at our local pino-based logger
+ * (./server/logging.js) instead of mcp-server-framework.
+ *
  * @module client
  */
 
+import "./polyfills/local-storage.js";
 import { KomodoClient as createKomodoClient } from "komodo_client";
-import { logger as baseLogger } from "mcp-server-framework";
+import { logger as baseLogger } from "./server/logging.js";
 import {
   AuthenticationError,
   ConnectionError,
@@ -97,7 +102,9 @@ export class KomodoClient {
 
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(ConnectionError.timeout(url)), timeoutMs);
+      timeoutHandle = setTimeout(() => {
+        reject(ConnectionError.timeout(url));
+      }, timeoutMs);
     });
     // Defensive: swallow a late rejection if the timer fires after the race already settled.
     void timeoutPromise.catch(() => {});

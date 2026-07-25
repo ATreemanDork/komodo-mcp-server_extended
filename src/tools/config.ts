@@ -4,16 +4,31 @@
  * Entry-point tools for establishing and verifying the Komodo connection.
  * A valid connection via `komodo_configure` is required before any other tools work.
  *
+ * Structurally different from every other domain in this port: no
+ * `tryRegisterResource`, no `paginate`, no `wrapExecuteAndPoll`/
+ * `buildActionResult` — this domain doesn't touch the Komodo API's resource
+ * CRUD surface at all.
+ *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/config.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * `error`→`errorResult`) for the shape of the changes relative to the
+ * reference.
+ *
  * @module tools/config
  */
 
-import { defineTool, error, structured, z } from "mcp-server-framework";
-import { logger as baseLogger } from "mcp-server-framework";
+import { z } from "zod";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult, errorResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { SERVER_VERSION, RESPONSE_ICONS, ToolCategories, ToolScopes } from "../config/index.js";
 import { KomodoClient, komodoConnection, resolveAuth } from "../client.js";
 import { AuthenticationError } from "../errors/index.js";
-import { healthCheckOutputSchema, configureInputSchema, configureOutputSchema } from "./schemas/index.js";
-import { renderHealthCheck } from "../utils/index.js";
+import { logger as baseLogger } from "../server/logging.js";
+import { renderHealthCheck } from "./renderers/config.js";
+import { healthCheckOutputSchema, configureInputSchema, configureOutputSchema } from "./schemas/config.js";
 
 const logger = baseLogger.child({ component: "config-tools" });
 
@@ -50,12 +65,8 @@ async function queryLoginOptions(url: string): Promise<string | null> {
       options.oidc && "OIDC",
     ].filter(Boolean);
     return methods.length > 0 ? methods.join(", ") : null;
-  } catch (error) {
-    logger.trace(
-      "Could not query login options from %s: %s",
-      url,
-      error instanceof Error ? error.message : String(error),
-    );
+  } catch (err) {
+    logger.trace("Could not query login options from %s: %s", url, err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -81,13 +92,13 @@ export const configureTool = defineTool({
     ).length;
     if (methods > 1) {
       logger.warn("Configuration rejected: multiple auth methods provided");
-      return error("Provide only one authentication method: username+password, apiKey+apiSecret, or jwtToken");
+      return errorResult("Provide only one authentication method: username+password, apiKey+apiSecret, or jwtToken");
     }
 
     const auth = resolveAuth(args);
     if (!auth) {
       logger.warn("Configuration rejected: no auth method provided");
-      return error("Provide one authentication method: username+password, apiKey+apiSecret, or jwtToken");
+      return errorResult("Provide one authentication method: username+password, apiKey+apiSecret, or jwtToken");
     }
 
     const authLabel = getAuthLabel(auth.method);
@@ -103,7 +114,7 @@ export const configureTool = defineTool({
 
     if (!success) {
       logger.warn("Connected to %s but health check failed: %s", args.url, healthError ?? "unknown");
-      return structured(
+      return structuredResult(
         {
           configured: true,
           healthy: false,
@@ -135,7 +146,7 @@ export const configureTool = defineTool({
     if (loginMethods) lines.push(`${RESPONSE_ICONS.LIST} Login Methods: ${loginMethods}`);
     lines.push("", "Ready for container management.");
 
-    return structured(
+    return structuredResult(
       {
         configured: true,
         healthy: true,
@@ -149,6 +160,8 @@ export const configureTool = defineTool({
   },
 });
 
+registerToolDefinition(configureTool);
+
 // ============================================================================
 // Health Check
 // ============================================================================
@@ -160,7 +173,7 @@ export const healthCheckTool = defineTool({
     "Works without an active connection (reports unconfigured state).",
   input: z.object({}),
   output: healthCheckOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.CONFIG },
   requiredScopes: [ToolScopes.READ],
   handler: async () => {
@@ -172,7 +185,7 @@ export const healthCheckTool = defineTool({
         healthy: false,
         mcp_server_version: SERVER_VERSION,
       };
-      return structured(payload, { text: renderHealthCheck(payload) });
+      return structuredResult(payload, { text: renderHealthCheck(payload) });
     }
 
     try {
@@ -186,7 +199,7 @@ export const healthCheckTool = defineTool({
           ...(health.version ? { komodo_version: health.version } : {}),
           mcp_server_version: SERVER_VERSION,
         };
-        return structured(payload, { text: renderHealthCheck(payload) });
+        return structuredResult(payload, { text: renderHealthCheck(payload) });
       }
 
       logger.warn("Health check failed for %s: %s", client.url, health.error);
@@ -197,13 +210,13 @@ export const healthCheckTool = defineTool({
         mcp_server_version: SERVER_VERSION,
         ...(health.error ? { error: health.error } : {}),
       };
-      return structured(payload, { text: renderHealthCheck(payload) });
-    } catch (error) {
+      return structuredResult(payload, { text: renderHealthCheck(payload) });
+    } catch (err) {
       // AuthenticationError (401/403) — propagate with clear message + recovery hint
-      if (error instanceof AuthenticationError) throw error;
+      if (err instanceof AuthenticationError) throw err;
 
-      logger.warn("Health check error for %s: %s", client.url, error instanceof Error ? error.message : String(error));
-      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.warn("Health check error for %s: %s", client.url, err instanceof Error ? err.message : String(err));
+      const errMsg = err instanceof Error ? err.message : String(err);
       const payload = {
         configured: true,
         healthy: false,
@@ -211,7 +224,9 @@ export const healthCheckTool = defineTool({
         mcp_server_version: SERVER_VERSION,
         error: errMsg,
       };
-      return structured(payload, { text: renderHealthCheck(payload) });
+      return structuredResult(payload, { text: renderHealthCheck(payload) });
     }
   },
 });
+
+registerToolDefinition(healthCheckTool);

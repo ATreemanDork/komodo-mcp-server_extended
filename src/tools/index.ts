@@ -1,23 +1,37 @@
 /**
- * Tool Auto-Registration
+ * Tool Modules
  *
- * Side-effect imports that register all tools in the global registry.
- * Import this file to make all tools available to the MCP server.
+ * Importing this module runs every tool file's top-level
+ * `registerToolDefinition()` call (see e.g. `./server.js`), populating the
+ * in-process registry (`src/mcp/registry.ts`) that `create-server.ts`
+ * enumerates. Add each new tool domain file's import here as it's ported
+ * — this file is the single place that lists them.
+ *
+ * @module tools/index
  */
 
-import "./config.js";
-import "./container.js";
 import "./server.js";
+import "./deployment.js";
+import "./stack.js";
 import "./build.js";
 import "./repo.js";
-import "./procedure.js";
 import "./action.js";
-import "./alerter.js";
-import "./swarm.js";
-import "./stack.js";
-import "./deployment.js";
+import "./procedure.js";
+import "./update.js";
 import "./terminal.js";
+import "./swarm.js";
+import "./container.js";
+import "./config.js";
 import "./user.js";
 import "./variable.js";
+import "./alerter.js";
 import "./resource-sync.js";
-import "./update.js";
+import "./docker.js";
+import "./tag.js";
+import "./onboarding-key.js";
+import "./builder.js";
+import "./git-provider.js";
+import "./docker-registry.js";
+import "./user-group.js";
+import "./permission.js";
+import "./toml.js";

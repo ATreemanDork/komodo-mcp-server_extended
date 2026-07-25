@@ -10,39 +10,46 @@
  * - `komodo_deployment_delete`  — remove deployment from Komodo
  * - `komodo_deployment_action`  — consolidated lifecycle (deploy/pull/start/restart/pause/unpause/stop/destroy)
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/deployment.ts) onto this repo's
+ * own `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/deployment
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { PARAM_DESCRIPTIONS, ToolCategories, ToolScopes, config } from "../config/index.js";
+import { destructiveWhenActionIn } from "../guardrails/policy.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  paginate,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  renderDeploymentList,
-  renderDeploymentInfo,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { redactObject } from "../utils/redact.js";
+import { renderDeploymentList, renderDeploymentInfo } from "./renderers/deployment.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   deploymentApplyInputSchema,
   deploymentActionInputSchema,
-  deploymentIdSchema,
   deploymentListOutputSchema,
   deploymentInfoOutputSchema,
+} from "./schemas/deployment.js";
+import { deploymentIdSchema } from "./schemas/validators.js";
+import {
   actionResultSchema,
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type DeploymentListItem = Types.DeploymentListItem;
 
@@ -57,16 +64,12 @@ export const listDeploymentsTool = defineTool({
     "Shows deployment name, ID, and current state.",
   input: paginationInputSchema,
   output: deploymentListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.DEPLOYMENT },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const deployments = await wrapApiCall(
-      "list deployments",
-      () => komodo.client.read("ListDeployments", {}),
-      abortSignal,
-    );
+    const deployments = await wrapApiCall("list deployments", () => komodo.client.read("ListDeployments", {}));
     const allItems = deployments.map((d: DeploymentListItem) => ({
       id: d.id,
       name: d.name,
@@ -75,9 +78,11 @@ export const listDeploymentsTool = defineTool({
     }));
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderDeploymentList(payload) });
+    return structuredResult(payload, { text: renderDeploymentList(payload) });
   },
 });
+
+registerToolDefinition(listDeploymentsTool);
 
 // ============================================================================
 // Info / CRUD
@@ -93,15 +98,13 @@ export const getDeploymentInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: deploymentInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.DEPLOYMENT },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getDeployment",
-      () => komodo.client.read("GetDeployment", { deployment: args.deployment }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getDeployment", () => komodo.client.read("GetDeployment", { deployment: args.deployment })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -115,12 +118,14 @@ export const getDeploymentInfoTool = defineTool({
     });
     const summary = { id: args.deployment, name: args.deployment };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderDeploymentInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getDeploymentInfoTool);
 
 export const applyDeploymentTool = defineTool({
   name: "komodo_deployment_apply",
@@ -135,7 +140,7 @@ export const applyDeploymentTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.DEPLOYMENT },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
@@ -146,13 +151,11 @@ export const applyDeploymentTool = defineTool({
         deploymentConfig.image =
           typeof args.image === "string" ? { type: "Image", params: { image: args.image } } : args.image;
       }
-      const result = await wrapApiCall(
-        "createDeployment",
-        () => komodo.client.write("CreateDeployment", { name, config: deploymentConfig }),
-        abortSignal,
+      const result = await wrapApiCall("createDeployment", () =>
+        komodo.client.write("CreateDeployment", { name, config: deploymentConfig }),
       );
       const built = buildApplyResult("create", "deployment", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.deployment) throw AppErrorFactory.validation.fieldRequired("deployment");
     const deploymentId = args.deployment;
@@ -164,12 +167,13 @@ export const applyDeploymentTool = defineTool({
           id: deploymentId,
           config: args.config as Types._PartialDeploymentConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "deployment", deploymentId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyDeploymentTool);
 
 export const deleteDeploymentTool = defineTool({
   name: "komodo_deployment_delete",
@@ -180,19 +184,20 @@ export const deleteDeploymentTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.DEPLOYMENT },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteDeployment",
-      () => komodo.client.write("DeleteDeployment", { id: args.deployment }),
-      abortSignal,
+    const result = await wrapApiCall("deleteDeployment", () =>
+      komodo.client.write("DeleteDeployment", { id: args.deployment }),
     );
     const built = buildDeleteResult("deployment", args.deployment, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteDeploymentTool);
 
 // ============================================================================
 // Lifecycle
@@ -227,20 +232,20 @@ export const deploymentActionTool = defineTool({
   input: deploymentActionInputSchema,
   output: actionResultSchema,
   annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+  guardrail: destructiveWhenActionIn(["destroy"]),
   _meta: { category: ToolCategories.DEPLOYMENT },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = DEPLOYMENT_ACTION_API_MAP[args.action];
-    const update = await wrapExecuteAndPoll(
-      `${args.action} deployment`,
-      () => komodo.client.execute(apiAction, { deployment: args.deployment }),
-      abortSignal,
-      reportProgress,
+    const update = await wrapExecuteAndPoll(`${args.action} deployment`, () =>
+      komodo.client.execute(apiAction, { deployment: args.deployment }),
     );
     const payload = buildActionResult(update, args.action, "deployment", args.deployment);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(deploymentActionTool);

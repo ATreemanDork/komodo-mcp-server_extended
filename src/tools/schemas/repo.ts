@@ -3,10 +3,18 @@
  *
  * Zod schemas for Komodo Repo resources (`komodo_repo_*` tools).
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/repo.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework dependency
+ * re-export, which we don't depend on. `repoIdSchema` did not exist
+ * anywhere in this repo's already-ported `tools/schemas/validators.ts` —
+ * defined here per the dispatch contract's rule 7 (ID schemas not already
+ * in `validators.ts` live in the domain's own schema file).
+ *
  * @module tools/schemas/repo
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { PARAM_DESCRIPTIONS, CONFIG_DESCRIPTIONS } from "../../config/index.js";
 import { resourceNameSchema } from "./validators.js";
 import { actionResultSchema, pageOutputSchema, resourceLinkSchema, systemCommandSchema } from "./shared.js";
@@ -95,12 +103,6 @@ export const repoConfigSchema = z
   })
   .describe("Repo configuration — only specify fields you want to set or update");
 
-/**
- * Discriminated input for `komodo_repo_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Repo (`name` required)
- * - `action: "update"` — PATCH-style update of an existing Repo (`repo` required)
- */
 /**
  * Input for `komodo_repo_apply` (create-or-update).
  *

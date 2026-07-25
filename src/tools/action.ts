@@ -16,27 +16,31 @@
  * - `komodo_action_apply`  — create-or-update (discriminated by `action`)
  * - `komodo_action_delete` — unregister an Action
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/action.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/action
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  paginate,
-  renderActionList,
-  renderActionInfo,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { redactObject } from "../utils/redact.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { renderActionList, renderActionInfo } from "./renderers/action.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   actionIdSchema,
   actionListOutputSchema,
@@ -44,11 +48,13 @@ import {
   actionActionInputSchema,
   actionActionOutputSchema,
   actionApplyInputSchema,
+} from "./schemas/action.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type ActionListItem = Types.ActionListItem;
 
@@ -65,24 +71,26 @@ export const listActionsTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.ACTION },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const actions = await wrapApiCall("listActions", () => komodo.client.read("ListActions", {}), abortSignal);
+    const actions = await wrapApiCall("listActions", () => komodo.client.read("ListActions", {}));
 
     const allItems = actions.map((a: ActionListItem) => ({
       id: a.id,
       name: a.name,
       state: a.info.state,
-      ...(a.info.last_run_at !== undefined ? { last_run_at: a.info.last_run_at } : {}),
-      ...(a.info.next_scheduled_run !== undefined ? { next_scheduled_run: a.info.next_scheduled_run } : {}),
+      ...(a.info.last_run_at ? { last_run_at: a.info.last_run_at } : {}),
+      ...(a.info.next_scheduled_run ? { next_scheduled_run: a.info.next_scheduled_run } : {}),
       ...(a.info.schedule_error ? { schedule_error: a.info.schedule_error } : {}),
     }));
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderActionList(payload) });
+    return structuredResult(payload, { text: renderActionList(payload) });
   },
 });
+
+registerToolDefinition(listActionsTool);
 
 // ============================================================================
 // Info
@@ -101,12 +109,10 @@ export const getActionInfoTool = defineTool({
   annotations: { readOnlyHint: true },
   _meta: { category: ToolCategories.ACTION },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getAction",
-      () => komodo.client.read("GetAction", { action: args.action_id }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getAction", () => komodo.client.read("GetAction", { action: args.action_id })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -123,12 +129,14 @@ export const getActionInfoTool = defineTool({
       name: result.name,
     };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getActionInfoTool);
 
 // ============================================================================
 // Action
@@ -143,24 +151,25 @@ export const actionActionTool = defineTool({
   annotations: { readOnlyHint: false, idempotentHint: false },
   _meta: { category: ToolCategories.ACTION },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const update = await wrapExecuteAndPoll(
-      `${args.action} action '${args.action_id}'`,
-      () =>
-        komodo.client.execute("RunAction", {
-          action: args.action_id,
-          ...(args.args ? { args: args.args as Types.JsonObject } : {}),
-        }),
-      abortSignal,
-      reportProgress,
+    const update = await wrapExecuteAndPoll(`${args.action} action '${args.action_id}'`, () =>
+      komodo.client.execute("RunAction", {
+        action: args.action_id,
+        // `args.args` is already `Record<string, unknown>` per the Zod schema;
+        // Komodo SDK's `JsonObject` is `any`, so no cast is needed (and casting
+        // to an `any` alias would trigger `no-unsafe-assignment`).
+        ...(args.args ? { args: args.args } : {}),
+      }),
     );
     const payload = buildActionResult(update, args.action, "action", args.action_id);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(actionActionTool);
 
 // ============================================================================
 // CRUD
@@ -178,7 +187,7 @@ export const applyActionTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.ACTION },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
@@ -191,10 +200,9 @@ export const applyActionTool = defineTool({
             name,
             config: (args.config ?? {}) as unknown as Types._PartialActionConfig,
           }),
-        abortSignal,
       );
       const built = buildApplyResult("create", "action", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.action_id) throw AppErrorFactory.validation.fieldRequired("action_id");
     const actionId = args.action_id;
@@ -206,12 +214,13 @@ export const applyActionTool = defineTool({
           id: actionId,
           config: args.config as unknown as Types._PartialActionConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "action", actionId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyActionTool);
 
 export const deleteActionTool = defineTool({
   name: "komodo_action_delete",
@@ -221,16 +230,15 @@ export const deleteActionTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.ACTION },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteAction",
-      () => komodo.client.write("DeleteAction", { id: args.action_id }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteAction", () => komodo.client.write("DeleteAction", { id: args.action_id }));
     const built = buildDeleteResult("action", args.action_id, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteActionTool);

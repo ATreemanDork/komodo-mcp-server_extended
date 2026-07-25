@@ -1,27 +1,19 @@
 /**
  * Configuration Module
  *
+ * Re-export surface for config consumers.
+ *
  * @module config
  */
 
-// Server identity
-export const SERVER_NAME = "komodo-mcp-server";
+/** This server's identity name, reported in the MCP `initialize` handshake. */
+export const SERVER_NAME = "komodo-mcp";
 export { APP_VERSION as SERVER_VERSION } from "./version.js";
 
-// Environment
 export { config, getKomodoCredentials, type KomodoCredentials, type AppEnvConfig } from "./env.js";
-
-// Config file section
-export { registerKomodoConfigSection, type KomodoFileConfig } from "./env.js";
-
-// Tool defaults
-export { VALIDATION_LIMITS, CONTAINER_LOGS_DEFAULTS, LOG_SEARCH_DEFAULTS } from "./tools.config.js";
-
-// Tool metadata (categories + scopes)
 export { ToolCategories, type ToolCategory } from "./categories.js";
 export { ToolScopes, type ToolScope } from "./scopes.js";
-
-// Descriptions
+export { VALIDATION_LIMITS, CONTAINER_LOGS_DEFAULTS, LOG_SEARCH_DEFAULTS } from "./tools.config.js";
 export {
   RESPONSE_ICONS,
   PARAM_DESCRIPTIONS,

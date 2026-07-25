@@ -11,3 +11,6 @@ package-lock.json
 # Generated
 *.tsbuildinfo
 coverage/
+
+# Reference material — not ours to reformat
+references/

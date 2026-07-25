@@ -2,13 +2,23 @@
  * Application Environment Configuration
  *
  * Komodo-specific environment variables only.
- * Framework variables (MCP_TRANSPORT, MCP_PORT, etc.) are handled by the framework.
+ *
+ * DEVIATION (scope decision, not an oversight): the reference version reads
+ * a third credential tier from a framework-managed `[komodo]` config-file
+ * section (TOML/YAML/JSON) via `registerConfigSection`/`getAppConfig`. That
+ * whole config-file merge layer is dropped for this step — the deployment
+ * target only uses env vars, and the plan's own Architecture notes treat
+ * file-based config as a separate `config/file-config.ts` module for a
+ * later pass, not tied to this step. `getKomodoCredentials()` here only
+ * resolves the two tiers that remain: environment variables, then
+ * `*_FILE` Docker-secret paths (env wins).
  *
  * @module config/env
  */
 
 import { readFileSync } from "node:fs";
-import { z, registerConfigSection, getAppConfig, durationSchema } from "mcp-server-framework";
+import { z } from "zod";
+import { durationSchema } from "./duration.js";
 
 // ============================================================================
 // Schema
@@ -59,6 +69,44 @@ export const appEnvSchema = z.object({
 
   /** Maximum number of dynamic resource entries kept in memory. Default: 1000 */
   KOMODO_RESOURCE_MAX_ENTRIES: z.coerce.number().int().positive().default(1000),
+
+  /**
+   * MCP transport to start. "stdio" and "http" (Streamable HTTP) are wired
+   * up as of this build step — `src/index.ts` throws a clear "not
+   * implemented yet" error for "https" until TLS wiring lands. Default: 'stdio'
+   */
+  MCP_TRANSPORT: z.enum(["stdio", "http", "https"]).default("stdio"),
+
+  /** Host the Streamable HTTP transport binds to (only used when MCP_TRANSPORT=http|https). Default: '127.0.0.1' */
+  MCP_BIND_HOST: z.string().default("127.0.0.1"),
+
+  /** Port the Streamable HTTP transport binds to (only used when MCP_TRANSPORT=http|https). Default: 8000 */
+  MCP_PORT: z.coerce.number().int().positive().default(8000),
+
+  /**
+   * Maximum number of concurrent Streamable HTTP MCP sessions kept in memory.
+   * A request that would create a session beyond this cap is rejected with
+   * HTTP 503. Default: 100
+   */
+  MCP_MAX_SESSIONS: z.coerce.number().int().positive().default(100),
+
+  /**
+   * Idle timeout for a Streamable HTTP MCP session. A session with no request
+   * activity for longer than this is closed and its slot freed by a periodic
+   * sweep, so abandoned sessions (client dropped without a DELETE) can't
+   * exhaust MCP_MAX_SESSIONS. Accepts durations ('30m') or ms. Default: '30m'
+   */
+  MCP_SESSION_IDLE_MS: durationSchema("30m").pipe(z.number().int().positive()),
+
+  /**
+   * Optional signing key (any string) for guardrail dry-run/confirm tokens
+   * (`src/guardrails/confirm.ts`). If unset, a random key is generated at
+   * process boot — tokens then don't survive a restart, which is a safe
+   * failure (forces a fresh dry-run call), not a security gap, since tokens
+   * only need to live seconds-to-minutes. Set this only if you want a
+   * confirm token to remain valid across a restart.
+   */
+  GUARDRAIL_HMAC_SECRET: z.string().optional(),
 });
 
 export type AppEnvConfig = z.infer<typeof appEnvSchema>;
@@ -102,65 +150,20 @@ function readSecretFile(filePath: string | undefined): string | undefined {
  * Sources (highest priority wins):
  * 1. Environment variables (process.env)
  * 2. Docker secret files (*_FILE env vars)
- * 3. Config file `[komodo]` section (via framework config system)
+ *
+ * (A third, file-based `[komodo]` config-section tier exists in the
+ * reference implementation — dropped here, see module-level deviation note.)
  *
  * Important for Docker containers where env_file variables
  * are only available after container start.
  */
 export function getKomodoCredentials(): KomodoCredentials {
-  const file = getAppConfig<KomodoFileConfig>("komodo");
-
   return {
-    url: process.env["KOMODO_URL"] ?? file?.url,
-    username: process.env["KOMODO_USERNAME"] ?? readSecretFile(process.env["KOMODO_USERNAME_FILE"]) ?? file?.username,
-    password: process.env["KOMODO_PASSWORD"] ?? readSecretFile(process.env["KOMODO_PASSWORD_FILE"]) ?? file?.password,
-    apiKey: process.env["KOMODO_API_KEY"] ?? readSecretFile(process.env["KOMODO_API_KEY_FILE"]) ?? file?.api_key,
-    apiSecret:
-      process.env["KOMODO_API_SECRET"] ?? readSecretFile(process.env["KOMODO_API_SECRET_FILE"]) ?? file?.api_secret,
-    jwtToken:
-      process.env["KOMODO_JWT_TOKEN"] ?? readSecretFile(process.env["KOMODO_JWT_TOKEN_FILE"]) ?? file?.jwt_token,
+    url: process.env["KOMODO_URL"],
+    username: process.env["KOMODO_USERNAME"] ?? readSecretFile(process.env["KOMODO_USERNAME_FILE"]),
+    password: process.env["KOMODO_PASSWORD"] ?? readSecretFile(process.env["KOMODO_PASSWORD_FILE"]),
+    apiKey: process.env["KOMODO_API_KEY"] ?? readSecretFile(process.env["KOMODO_API_KEY_FILE"]),
+    apiSecret: process.env["KOMODO_API_SECRET"] ?? readSecretFile(process.env["KOMODO_API_SECRET_FILE"]),
+    jwtToken: process.env["KOMODO_JWT_TOKEN"] ?? readSecretFile(process.env["KOMODO_JWT_TOKEN_FILE"]),
   };
-}
-
-// ============================================================================
-// Config File Section
-// ============================================================================
-
-/** Schema for the `[komodo]` section in config files (config.toml/yaml/json) */
-const komodoConfigFileSchema = z.object({
-  /** Komodo Core API URL */
-  url: z.string().url().optional(),
-  /** Username for login authentication */
-  username: z.string().optional(),
-  /** Path to file containing the username (Docker secrets) */
-  username_file: z.string().optional(),
-  /** Password for login authentication */
-  password: z.string().optional(),
-  /** Path to file containing the password (Docker secrets) */
-  password_file: z.string().optional(),
-  /** API Key for key-based authentication */
-  api_key: z.string().optional(),
-  /** Path to file containing the API key (Docker secrets) */
-  api_key_file: z.string().optional(),
-  /** API Secret for key-based authentication */
-  api_secret: z.string().optional(),
-  /** Path to file containing the API secret (Docker secrets) */
-  api_secret_file: z.string().optional(),
-  /** Pre-existing JWT token (e.g. from OIDC/OAuth browser login) */
-  jwt_token: z.string().optional(),
-  /** Path to file containing the JWT token (Docker secrets) */
-  jwt_token_file: z.string().optional(),
-  /** API request timeout as duration ('30s', '1m') or milliseconds (number) */
-  api_timeout_ms: z.union([z.number().int().positive(), z.string()]).optional(),
-});
-
-export type KomodoFileConfig = z.infer<typeof komodoConfigFileSchema>;
-
-/**
- * Register the `[komodo]` config file section with the framework.
- *
- * Must be called **before** `createServer()` which triggers config initialization.
- */
-export function registerKomodoConfigSection(): void {
-  registerConfigSection("komodo", komodoConfigFileSchema);
 }

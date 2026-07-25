@@ -3,10 +3,14 @@
  *
  * Centralized message registry for Komodo-specific errors.
  *
+ * Ported verbatim from the reference repo, except `interpolate`/
+ * `MessageParams` now come from local ./interpolate.js instead of
+ * mcp-server-framework.
+ *
  * @module errors/messages
  */
 
-import { interpolate, type MessageParams } from "mcp-server-framework";
+import { interpolate, type MessageParams } from "./interpolate.js";
 
 // ============================================================================
 // Message Definitions

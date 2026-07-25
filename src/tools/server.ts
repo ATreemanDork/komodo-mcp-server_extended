@@ -5,41 +5,46 @@
  * plus host-level operations (`komodo_server_action`) for batch container lifecycle,
  * Docker pruning, and resource deletion.
  *
+ * Extends the initial proof-of-concept file (`komodo_server_list` only,
+ * proving the `src/mcp/` seam end-to-end) to full parity with the
+ * reference repo's tool surface
+ * (references/komodo-mcp-server/src/tools/server.ts) — adds
+ * `komodo_server_stats`/`_info`/`_apply`/`_delete`/`_action`.
+ *
  * @module tools/server
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
-import { Types } from "komodo_client";
+import { z } from "zod";
+import type { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { destructiveWhenActionIn } from "../guardrails/policy.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { PARAM_DESCRIPTIONS, ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { redactObject } from "../utils/redact.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { renderServerList, renderServerInfo, renderServerStats } from "./renderers/server.js";
+import { renderActionResult } from "./renderers/_shared.js";
+import { serverIdSchema } from "./schemas/validators.js";
 import {
   serverApplyInputSchema,
-  serverIdSchema,
   serverActionInputSchema,
   serverActionOutputSchema,
   serverListOutputSchema,
   serverInfoOutputSchema,
   serverStatsOutputSchema,
+} from "./schemas/server.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  paginate,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  renderServerList,
-  renderServerInfo,
-  renderServerStats,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+} from "./schemas/shared.js";
 
 type ServerListItem = Types.ServerListItem;
 
@@ -47,35 +52,47 @@ type ServerListItem = Types.ServerListItem;
 // List
 // ============================================================================
 
+/** Compact summary of a server, mirroring the reference repo's list-tool shape. */
+interface ServerSummary {
+  id: string;
+  name: string;
+  state: string;
+  version?: string;
+  region?: string;
+}
+
+function toSummary(server: ServerListItem): ServerSummary {
+  const version =
+    server.info.version && server.info.version.toLowerCase() !== "unknown" ? server.info.version : undefined;
+  return {
+    id: server.id,
+    name: server.name,
+    state: server.info.state,
+    ...(version ? { version } : {}),
+    ...(server.info.region ? { region: server.info.region } : {}),
+  };
+}
+
 export const listServersTool = defineTool({
   name: "komodo_server_list",
   description:
     "List all servers registered in Komodo. Shows server name, ID, status (healthy/unhealthy/disabled), Periphery version, and region.",
   input: paginationInputSchema,
   output: serverListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const servers = await wrapApiCall("listServers", () => komodo.client.read("ListServers", {}), abortSignal);
-
-    const allItems = servers.map((s: ServerListItem) => {
-      const version = s.info.version && s.info.version.toLowerCase() !== "unknown" ? s.info.version : undefined;
-      return {
-        id: s.id,
-        name: s.name,
-        state: s.info.state,
-        ...(version ? { version } : {}),
-        ...(s.info.region ? { region: s.info.region } : {}),
-      };
-    });
-
+    const servers = await wrapApiCall("listServers", () => komodo.client.read("ListServers", {}));
+    const allItems = servers.map(toSummary);
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderServerList(payload) });
+    return structuredResult(payload, { text: renderServerList(payload) });
   },
 });
+
+registerToolDefinition(listServersTool);
 
 // ============================================================================
 // Stats
@@ -89,20 +106,20 @@ export const getServerStatsTool = defineTool({
     server: serverIdSchema.describe(PARAM_DESCRIPTIONS.SERVER_ID_FOR_STATS),
   }),
   output: serverStatsOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const stats = await wrapApiCall(
-      `get stats for server '${args.server}'`,
-      () => komodo.client.read("GetServerState", { server: args.server }),
-      abortSignal,
+    const stats = await wrapApiCall(`get stats for server '${args.server}'`, () =>
+      komodo.client.read("GetServerState", { server: args.server }),
     );
     const payload = { server: args.server, status: stats.status };
-    return structured(payload, { text: renderServerStats(payload) });
+    return structuredResult(payload, { text: renderServerStats(payload) });
   },
 });
+
+registerToolDefinition(getServerStatsTool);
 
 // ============================================================================
 // Info / CRUD
@@ -117,15 +134,13 @@ export const getServerInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: serverInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getServerInfo",
-      () => komodo.client.read("GetServer", { server: args.server }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getServerInfo", () => komodo.client.read("GetServer", { server: args.server })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -139,12 +154,14 @@ export const getServerInfoTool = defineTool({
     });
     const summary = { id: args.server, name: args.server };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderServerInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getServerInfoTool);
 
 export const applyServerTool = defineTool({
   name: "komodo_server_apply",
@@ -158,7 +175,7 @@ export const applyServerTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
@@ -171,10 +188,9 @@ export const applyServerTool = defineTool({
             name,
             config: (args.config ?? {}) as Types._PartialServerConfig,
           }),
-        abortSignal,
       );
       const built = buildApplyResult("create", "server", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.server) throw AppErrorFactory.validation.fieldRequired("server");
     const server = args.server;
@@ -186,12 +202,13 @@ export const applyServerTool = defineTool({
           id: server,
           config: args.config as Types._PartialServerConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "server", server, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applyServerTool);
 
 export const deleteServerTool = defineTool({
   name: "komodo_server_delete",
@@ -201,19 +218,18 @@ export const deleteServerTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteServer",
-      () => komodo.client.write("DeleteServer", { id: args.server }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteServer", () => komodo.client.write("DeleteServer", { id: args.server }));
     const built = buildDeleteResult("server", args.server, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteServerTool);
 
 // ============================================================================
 // Prune (host-level resource cleanup)
@@ -240,7 +256,7 @@ const SERVER_ACTION_API_MAP = {
   delete_network: "DeleteNetwork",
   delete_image: "DeleteImage",
   delete_volume: "DeleteVolume",
-} as const;
+} as const satisfies Record<z.infer<typeof serverActionInputSchema>["action"], string>;
 
 export const serverActionTool = defineTool({
   name: "komodo_server_action",
@@ -249,9 +265,21 @@ export const serverActionTool = defineTool({
   input: serverActionInputSchema,
   output: serverActionOutputSchema,
   annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+  guardrail: destructiveWhenActionIn([
+    "prune_containers",
+    "prune_images",
+    "prune_volumes",
+    "prune_networks",
+    "prune_system",
+    "prune_docker_builders",
+    "prune_buildx",
+    "delete_network",
+    "delete_image",
+    "delete_volume",
+  ]),
   _meta: { category: ToolCategories.SERVER },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = SERVER_ACTION_API_MAP[args.action];
 
@@ -267,12 +295,12 @@ export const serverActionTool = defineTool({
       `${args.action} on server '${args.server}'`,
       // @sdk-constraint — SDK execute() type uses literal-keyed unions; runtime accepts mapped string
       () => komodo.client.execute(apiAction as "PruneContainers", params as unknown as Types.PruneContainers),
-      abortSignal,
-      reportProgress,
     );
     const payload = buildActionResult(update, args.action, "server", args.server, args.server);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(serverActionTool);

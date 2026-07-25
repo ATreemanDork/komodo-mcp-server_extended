@@ -1,4 +1,6 @@
-.dev/
+# Reference material (Komodo source, existing MCP server, fastmcp) — local
+# research only, not part of this project's shipped history
+references/
 
 # Dependencies
 node_modules/
@@ -40,6 +42,8 @@ logs
 
 # Coverage directory used by tools like istanbul
 coverage/
+test-results/
 
 # TypeScript build info
 *.tsbuildinfo
+

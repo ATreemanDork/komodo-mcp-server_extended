@@ -3,10 +3,15 @@
  *
  * Cross-domain Zod subschemas reused across multiple tool domains.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/shared.ts) — `z` imported
+ * from `zod` directly rather than the reference's `mcp-server-framework`
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/shared
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 
 /** Cursor-based pagination input for list tools. */
 export const paginationInputSchema = z.object({
@@ -119,7 +124,10 @@ export const applyResultSchema = z
     action: z.enum(["create", "update"]).describe("Which apply action was performed"),
     resource_type: z.string().describe("Target resource type"),
     resource_id: z.string().describe("Resource id or name affected"),
-    resource: z.record(z.unknown()).optional().describe("Full resource returned by Komodo (when available)"),
+    resource: z
+      .record(z.unknown())
+      .optional()
+      .describe("Resource returned by Komodo, secrets redacted (see redactObject) — present when available"),
   })
   .describe("Outcome envelope for *_apply tools");
 
@@ -134,7 +142,10 @@ export const deleteResultSchema = z
     action: z.literal("remove").describe("Always 'remove' for delete tools"),
     resource_type: z.string().describe("Target resource type"),
     resource_id: z.string().describe("Resource id or name that was removed"),
-    resource: z.record(z.unknown()).optional().describe("Snapshot of the deleted resource (when available)"),
+    resource: z
+      .record(z.unknown())
+      .optional()
+      .describe("Snapshot of the deleted resource, secrets redacted (see redactObject) — present when available"),
   })
   .describe("Outcome envelope for *_delete tools");
 

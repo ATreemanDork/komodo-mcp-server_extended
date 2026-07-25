@@ -4,10 +4,15 @@
  * Zod schemas for Docker Compose stack configuration including
  * git integration, webhooks, and deployment hooks.
  *
+ * Ported near-verbatim from the reference repo
+ * (references/komodo-mcp-server/src/tools/schemas/stack.ts) — `z` imported
+ * from `zod` directly rather than the reference's third-party framework dependency
+ * re-export, which we don't depend on.
+ *
  * @module tools/schemas/stack
  */
 
-import { z } from "mcp-server-framework";
+import { z } from "zod";
 import { Types } from "komodo_client";
 import { PARAM_DESCRIPTIONS, FIELD_DESCRIPTIONS, CONFIG_DESCRIPTIONS } from "../../config/index.js";
 import { stackIdSchema, serverIdSchema, resourceNameSchema } from "./validators.js";
@@ -110,12 +115,6 @@ export const stackActionInputSchema = z.object({
   stack: stackIdSchema.describe("Stack ID or name"),
 });
 
-/**
- * Discriminated input for `komodo_stack_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Stack (`name` required, `server_id` recommended)
- * - `action: "update"` — PATCH-style update of an existing Stack (`stack` required)
- */
 /**
  * Input for `komodo_stack_apply` (create-or-update).
  *

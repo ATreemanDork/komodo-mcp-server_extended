@@ -1,76 +1,65 @@
 #!/usr/bin/env node
 /**
- * Komodo MCP Server — Entry Point
+ * Entry Point
  *
- * Creates and starts the MCP server with all Komodo tools auto-registered.
+ * Builds the MCP server, starts the configured transport, and wires up
+ * graceful shutdown. `stdio` and `http` (Streamable HTTP) are implemented —
+ * `https` (TLS) is a later step, see the throw below.
+ *
+ * @module index
  */
 
-// Must be first import — polyfills localStorage for mogh_auth_client (Node.js)
-import "./utils/polyfills.js";
+import { config } from "./config/index.js";
+import { komodoConnection } from "./client.js";
+import { createServer } from "./server/create-server.js";
+import { startStdioTransport } from "./server/transports/stdio.js";
+import { startHttpTransport } from "./server/transports/http.js";
+import { logger as baseLogger } from "./server/logging.js";
 
-import {
-  createServer,
-  logger,
-  configureDynamicResourceRegistry,
-  defineDynamicResourceTemplate,
-} from "mcp-server-framework";
-import { SERVER_NAME, SERVER_VERSION, registerKomodoConfigSection, config } from "./config/index.js";
-import { initializeKomodoClientFromEnv, komodoConnection } from "./client.js";
-import { getKomodoCredentials } from "./config/index.js";
+const logger = baseLogger.child({ component: "index" });
 
-// Side-effect imports — register all tools in the global registry
-import "./tools/index.js";
+/** Installs SIGINT/SIGTERM handlers that run `cleanup` once, then exit. */
+function installShutdownHandlers(cleanup: () => Promise<void>): void {
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("Received %s — shutting down", signal);
+    void (async () => {
+      await cleanup();
+      process.exit(0);
+    })();
+  };
 
-// Register [komodo] config file section before server init
-registerKomodoConfigSection();
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
 
-// Configure ephemeral resource registry and register the canonical template
-configureDynamicResourceRegistry({
-  uriScheme: "ephemeral",
-  maxEntries: config.KOMODO_RESOURCE_MAX_ENTRIES,
-});
-defineDynamicResourceTemplate();
+async function main(): Promise<void> {
+  if (config.MCP_TRANSPORT === "https") {
+    throw new Error(
+      'MCP_TRANSPORT="https" is not implemented yet — TLS wiring for the Streamable HTTP transport is a later build step. Use "http" (behind a TLS-terminating reverse proxy) or "stdio" instead.',
+    );
+  }
 
-// ============================================================================
-// Server Instance
-// ============================================================================
-
-const { start } = createServer({
-  name: SERVER_NAME,
-  version: SERVER_VERSION,
-
-  capabilities: {
-    tools: { listChanged: true },
-    logging: true,
-  },
-
-  lifecycle: {
-    onStarting: initializeKomodoClientFromEnv,
-    onStopping: () => {
+  if (config.MCP_TRANSPORT === "http") {
+    const httpTransport = await startHttpTransport();
+    installShutdownHandlers(async () => {
       komodoConnection.stopMonitoring();
-    },
-  },
+      await httpTransport.close();
+    });
+    return;
+  }
 
-  health: {
-    readinessCheck: () => {
-      if (!getKomodoCredentials().url) return true;
-      return komodoConnection.connected || "Komodo API not connected";
-    },
-    serviceLabel: "komodo",
-  },
+  const mcpServer = createServer();
+  await startStdioTransport(mcpServer);
+  installShutdownHandlers(async () => {
+    komodoConnection.stopMonitoring();
+    await mcpServer.stop();
+  });
+}
 
-  shutdown: {
-    timeoutMs: 10_000,
-    forceExitOnTimeout: true,
-    signals: ["SIGINT", "SIGTERM"],
-  },
-});
-
-// ============================================================================
-// Start
-// ============================================================================
-
-start().catch((error: unknown) => {
-  logger.error("Failed to start Komodo MCP Server: %s", error instanceof Error ? error.message : String(error));
-  process.exit(1);
+main().catch((error: unknown) => {
+  logger.error("Fatal error during startup: %s", error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 });

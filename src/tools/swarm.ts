@@ -15,29 +15,32 @@
  * - `komodo_swarm_services_list`  — list services running on a swarm
  * - `komodo_swarm_action`         — node/service/stack management
  *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/tools/swarm.ts) onto this repo's own
+ * `@modelcontextprotocol/sdk` integration — see the dispatch contract's
+ * mechanical conversion rules (Zod import, `structured`→`structuredResult`,
+ * dropped cancellation/progress-reporting plumbing) for the shape of the
+ * changes relative to the reference.
+ *
  * @module tools/swarm
  */
 
-import { defineTool, structured, z } from "mcp-server-framework";
-import { Types } from "komodo_client";
+import { z } from "zod";
+import type { Types } from "komodo_client";
+import { defineTool } from "../mcp/define-tool.js";
+import { destructiveWhenActionIn } from "../guardrails/policy.js";
+import { structuredResult } from "../mcp/content.js";
+import { registerToolDefinition } from "../mcp/registry.js";
 import { ToolCategories, ToolScopes, config } from "../config/index.js";
 import { AppErrorFactory } from "../errors/index.js";
-import {
-  requireClient,
-  wrapApiCall,
-  wrapExecuteAndPoll,
-  buildActionResult,
-  extractUpdateId,
-  paginate,
-  renderSwarmList,
-  renderSwarmInfo,
-  renderSwarmNodesList,
-  renderSwarmServicesList,
-  renderActionResult,
-  tryRegisterResource,
-  buildApplyResult,
-  buildDeleteResult,
-} from "../utils/index.js";
+import { requireClient, wrapApiCall } from "../utils/api-helpers.js";
+import { redactObject } from "../utils/redact.js";
+import { paginate } from "../utils/pagination.js";
+import { wrapExecuteAndPoll, buildActionResult, extractUpdateId } from "../utils/polling.js";
+import { buildApplyResult, buildDeleteResult } from "../utils/response-formatter.js";
+import { tryRegisterResource } from "../utils/resource-link.js";
+import { renderSwarmList, renderSwarmInfo, renderSwarmNodesList, renderSwarmServicesList } from "./renderers/swarm.js";
+import { renderActionResult } from "./renderers/_shared.js";
 import {
   swarmIdSchema,
   swarmListOutputSchema,
@@ -47,11 +50,13 @@ import {
   swarmApplyInputSchema,
   swarmNodesListOutputSchema,
   swarmServicesListOutputSchema,
+} from "./schemas/swarm.js";
+import {
   applyResultSchema,
   deleteResultSchema,
   inlineFullInputSchema,
   paginationInputSchema,
-} from "./schemas/index.js";
+} from "./schemas/shared.js";
 
 type SwarmListItem = Types.SwarmListItem;
 type SwarmNodeListItem = Types.SwarmNodeListItem;
@@ -67,12 +72,12 @@ export const listSwarmsTool = defineTool({
     "List all swarms registered in Komodo. Each swarm groups one or more Server resources that act as Docker Swarm managers.",
   input: paginationInputSchema,
   output: swarmListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const swarms = await wrapApiCall("listSwarms", () => komodo.client.read("ListSwarms", {}), abortSignal);
+    const swarms = await wrapApiCall("listSwarms", () => komodo.client.read("ListSwarms", {}));
 
     const allItems = swarms.map((s: SwarmListItem) => ({
       id: s.id,
@@ -84,9 +89,11 @@ export const listSwarmsTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { items: [...items], page };
-    return structured(payload, { text: renderSwarmList(payload) });
+    return structuredResult(payload, { text: renderSwarmList(payload) });
   },
 });
+
+registerToolDefinition(listSwarmsTool);
 
 // ============================================================================
 // Info
@@ -102,15 +109,13 @@ export const getSwarmInfoTool = defineTool({
     })
     .merge(inlineFullInputSchema),
   output: swarmInfoOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal, sessionId }) => {
+  handler: async (args, { sessionId }) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "getSwarm",
-      () => komodo.client.read("GetSwarm", { swarm: args.swarm }),
-      abortSignal,
+    const result = redactObject(
+      await wrapApiCall("getSwarm", () => komodo.client.read("GetSwarm", { swarm: args.swarm })),
     );
     const link = tryRegisterResource({
       ctx: { sessionId },
@@ -128,12 +133,14 @@ export const getSwarmInfoTool = defineTool({
       ...(result.config?.server_ids ? { server_ids: result.config.server_ids } : {}),
     };
     const payload = link ? { summary, resourceLink: link } : { summary, info: result };
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderSwarmInfo(payload),
       ...(link ? { links: [link] } : {}),
     });
   },
 });
+
+registerToolDefinition(getSwarmInfoTool);
 
 // ============================================================================
 // Nodes / Services list
@@ -148,15 +155,13 @@ export const listSwarmNodesTool = defineTool({
     })
     .merge(paginationInputSchema),
   output: swarmNodesListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const nodes = await wrapApiCall(
-      "listSwarmNodes",
-      () => komodo.client.read("ListSwarmNodes", { swarm: args.swarm }),
-      abortSignal,
+    const nodes = await wrapApiCall("listSwarmNodes", () =>
+      komodo.client.read("ListSwarmNodes", { swarm: args.swarm }),
     );
 
     const allItems = nodes.map((n: SwarmNodeListItem) => ({
@@ -170,9 +175,11 @@ export const listSwarmNodesTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { swarm: args.swarm, items: [...items], page };
-    return structured(payload, { text: renderSwarmNodesList(payload) });
+    return structuredResult(payload, { text: renderSwarmNodesList(payload) });
   },
 });
+
+registerToolDefinition(listSwarmNodesTool);
 
 export const listSwarmServicesTool = defineTool({
   name: "komodo_swarm_services_list",
@@ -183,15 +190,13 @@ export const listSwarmServicesTool = defineTool({
     })
     .merge(paginationInputSchema),
   output: swarmServicesListOutputSchema,
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.READ],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const services = await wrapApiCall(
-      "listSwarmServices",
-      () => komodo.client.read("ListSwarmServices", { swarm: args.swarm }),
-      abortSignal,
+    const services = await wrapApiCall("listSwarmServices", () =>
+      komodo.client.read("ListSwarmServices", { swarm: args.swarm }),
     );
 
     const allItems = services.map((s: SwarmServiceListItem) => ({
@@ -204,9 +209,11 @@ export const listSwarmServicesTool = defineTool({
 
     const { items, page } = paginate(allItems, args.cursor, args.page_size);
     const payload = { swarm: args.swarm, items: [...items], page };
-    return structured(payload, { text: renderSwarmServicesList(payload) });
+    return structuredResult(payload, { text: renderSwarmServicesList(payload) });
   },
 });
+
+registerToolDefinition(listSwarmServicesTool);
 
 // ============================================================================
 // Action (node/service/stack management)
@@ -218,7 +225,7 @@ const SWARM_ACTION_API_MAP = {
   remove_nodes: "RemoveSwarmNodes",
   remove_services: "RemoveSwarmServices",
   remove_stacks: "RemoveSwarmStacks",
-} as const satisfies Record<"update_node" | "remove_nodes" | "remove_services" | "remove_stacks", string>;
+} as const satisfies Record<z.infer<typeof swarmActionInputSchema>["action"], string>;
 
 export const swarmActionTool = defineTool({
   name: "komodo_swarm_action",
@@ -226,10 +233,11 @@ export const swarmActionTool = defineTool({
     "Swarm management. update_node: change availability/labels/role. remove_nodes: force-remove. remove_services / remove_stacks: equivalents of docker service rm / docker stack rm.",
   input: swarmActionInputSchema,
   output: swarmActionOutputSchema,
-  annotations: { idempotentHint: false, destructiveHint: true },
+  annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+  guardrail: destructiveWhenActionIn(["remove_nodes", "remove_services", "remove_stacks"]),
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.OPERATE],
-  handler: async (args, { abortSignal, reportProgress }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     const apiAction = SWARM_ACTION_API_MAP[args.action];
 
@@ -264,15 +272,15 @@ export const swarmActionTool = defineTool({
       `${args.action} on swarm '${args.swarm}'`,
       // @sdk-constraint — SDK execute() type uses literal-keyed unions; runtime accepts mapped string
       () => komodo.client.execute(apiAction as "UpdateSwarmNode", params as unknown as Types.UpdateSwarmNode),
-      abortSignal,
-      reportProgress,
     );
     const payload = buildActionResult(update, args.action, "swarm", args.swarm);
-    return structured(payload, {
+    return structuredResult(payload, {
       text: renderActionResult(payload, { updateId: extractUpdateId(update), logs: update.logs }),
     });
   },
 });
+
+registerToolDefinition(swarmActionTool);
 
 // ============================================================================
 // CRUD
@@ -290,40 +298,40 @@ export const applySwarmTool = defineTool({
   annotations: { idempotentHint: false },
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
     if (args.action === "create") {
       if (!args.name) throw AppErrorFactory.validation.fieldRequired("name");
       const name = args.name;
       const result = await wrapApiCall(
         "createSwarm",
+        // @type-variance — permissive record cast to partial config; Komodo API validates fields server-side
         () =>
           komodo.client.write("CreateSwarm", {
             name,
-            // @type-variance — permissive record cast to partial config; Komodo API validates fields server-side
             config: (args.config ?? {}) as Types._PartialSwarmConfig,
           }),
-        abortSignal,
       );
       const built = buildApplyResult("create", "swarm", name, result);
-      return structured(built.payload, { text: built.text });
+      return structuredResult(built.payload, { text: built.text });
     }
     if (!args.swarm) throw AppErrorFactory.validation.fieldRequired("swarm");
     const swarmId = args.swarm;
     const result = await wrapApiCall(
       "updateSwarm",
+      // @type-variance — permissive record cast to partial config; Komodo API validates fields server-side
       () =>
         komodo.client.write("UpdateSwarm", {
           id: swarmId,
-          // @type-variance — permissive record cast to partial config; Komodo API validates fields server-side
           config: args.config as Types._PartialSwarmConfig,
         }),
-      abortSignal,
     );
     const built = buildApplyResult("update", "swarm", swarmId, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(applySwarmTool);
 
 export const deleteSwarmTool = defineTool({
   name: "komodo_swarm_delete",
@@ -334,16 +342,15 @@ export const deleteSwarmTool = defineTool({
   }),
   output: deleteResultSchema,
   annotations: { destructiveHint: true },
+  guardrail: "destructive",
   _meta: { category: ToolCategories.SWARM },
   requiredScopes: [ToolScopes.ADMIN],
-  handler: async (args, { abortSignal }) => {
+  handler: async (args) => {
     const komodo = requireClient();
-    const result = await wrapApiCall(
-      "deleteSwarm",
-      () => komodo.client.write("DeleteSwarm", { id: args.swarm }),
-      abortSignal,
-    );
+    const result = await wrapApiCall("deleteSwarm", () => komodo.client.write("DeleteSwarm", { id: args.swarm }));
     const built = buildDeleteResult("swarm", args.swarm, result);
-    return structured(built.payload, { text: built.text });
+    return structuredResult(built.payload, { text: built.text });
   },
 });
+
+registerToolDefinition(deleteSwarmTool);

@@ -1,19 +1,29 @@
 /**
  * Polling Utilities
  *
- * Execute-and-poll workflow for long-running Komodo operations.
- * Provides cancellation via AbortSignal, progress reporting,
- * and timeout enforcement on top of `komodo_client.execute()`.
+ * Execute-and-poll workflow for long-running Komodo operations. Polls
+ * `komodo_client.execute()` results until the operation completes, with
+ * timeout enforcement on top.
+ *
+ * DEVIATION from the reference: the reference's version also accepts an
+ * `AbortSignal` for cancellation and a `ProgressReporter` for MCP progress
+ * notifications, both sourced from `mcp-server-framework`
+ * (`OperationCancelledError`, the `ProgressReporter` type) which has no
+ * local equivalent yet — same deviation already made in
+ * `utils/api-helpers.ts`'s `wrapApiCall` for the same reason. Cancellation
+ * and progress-reporting support belong to a later step once the
+ * guardrail/task layer needs them.
+ *
+ * Ported from the reference repo
+ * (references/komodo-mcp-server/src/utils/polling.ts).
  *
  * @module utils/polling
  */
 
 import { Types } from "komodo_client";
-import type { ProgressReporter } from "mcp-server-framework";
-import { OperationCancelledError } from "mcp-server-framework";
 import type { KomodoClient } from "../client.js";
 import { ApiError } from "../errors/index.js";
-import { requireClient, checkCancelled, wrapApiCall } from "./api-helpers.js";
+import { requireClient, wrapApiCall } from "./api-helpers.js";
 
 type Update = Types.Update;
 
@@ -26,9 +36,6 @@ const POLL_INTERVAL_MS = 1_000;
 
 /** Maximum time to wait for an operation to complete (30 minutes) */
 const POLL_MAX_DURATION_MS = 1_800_000;
-
-/** Interval between progress reports to the MCP client (ms) */
-const POLL_PROGRESS_INTERVAL_MS = 5_000;
 
 // ============================================================================
 // Update Helpers
@@ -49,90 +56,32 @@ export function extractUpdateId(update: { _id?: { $oid?: string } }): string {
  * Polls a Komodo update until its status reaches `Complete`.
  *
  * Komodo updates follow the lifecycle `Queued → InProgress → Complete`.
- * During `InProgress`, the backend appends log entries to `update.logs[]`
- * via `update_update()` — each entry represents a completed stage
- * (e.g. "Deploy Container", "Clone Repo", "Diff compose files").
  *
- * Progress is reported based on these **real operation stages**:
- * - New stages are reported immediately when detected
- * - Between stages, a heartbeat is sent every {@link POLL_PROGRESS_INTERVAL_MS}
- * - Progress is **indeterminate** (no `total`) because stage count varies
- *   per operation (typically 1–8) and is not known upfront
- *
- * @param client     - Komodo API client
- * @param updateId   - The `_id.$oid` of the Update returned by `execute()`
- * @param operation  - Human-readable operation name (for progress messages)
- * @param signal     - AbortSignal for cancellation
- * @param reportProgress - MCP progress reporter (optional)
+ * @param client    - Komodo API client
+ * @param updateId  - The `_id.$oid` of the Update returned by `execute()`
+ * @param operation - Human-readable operation name (for error messages)
  * @returns The final Update with `status === "Complete"`
  */
-async function pollUntilComplete(
-  client: KomodoClient,
-  updateId: string,
-  operation: string,
-  signal?: AbortSignal,
-  reportProgress?: ProgressReporter,
-): Promise<Update> {
+async function pollUntilComplete(client: KomodoClient, updateId: string, operation: string): Promise<Update> {
   const startTime = Date.now();
-  let lastProgressTime = 0;
-  let lastStageCount = 0;
 
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- intentional polling loop, exits via return or throw
   while (true) {
-    checkCancelled(signal, operation);
-
-    // Wait one poll interval
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-    checkCancelled(signal, operation);
 
     const elapsed = Date.now() - startTime;
 
     // Enforce maximum timeout
     if (elapsed > POLL_MAX_DURATION_MS) {
       throw ApiError.requestFailed(
-        `${operation}: polling timed out after ${Math.round(elapsed / 1000)}s (update: ${updateId})`,
+        `${operation}: polling timed out after ${String(Math.round(elapsed / 1000))}s (update: ${updateId})`,
       );
     }
 
     // Poll status
-    const update = await wrapApiCall(
-      `${operation} (poll)`,
-      () => client.client.read("GetUpdate", { id: updateId }),
-      signal,
-    );
-
-    const logs = update.logs;
-    const stageCount = logs.length;
-    const elapsedSec = Math.round(elapsed / 1000);
-
-    if (reportProgress) {
-      if (stageCount > lastStageCount) {
-        lastStageCount = stageCount;
-        lastProgressTime = elapsed;
-        const latestStage = logs[stageCount - 1]?.stage ?? "processing";
-        await reportProgress({
-          progress: stageCount,
-          message: `${operation}: ${latestStage} (${elapsedSec}s)`,
-        });
-      } else if (elapsed - lastProgressTime >= POLL_PROGRESS_INTERVAL_MS) {
-        lastProgressTime = elapsed;
-        await reportProgress({
-          progress: stageCount,
-          message: `${operation}: in progress (${elapsedSec}s)`,
-        });
-      }
-    }
+    const update = await wrapApiCall(`${operation} (poll)`, () => client.client.read("GetUpdate", { id: updateId }));
 
     if (update.status === Types.UpdateStatus.Complete) {
-      if (reportProgress) {
-        const totalSec = Math.round((Date.now() - startTime) / 1000);
-        await reportProgress({
-          progress: stageCount,
-          total: stageCount || 1,
-          message: `${operation}: complete (${totalSec}s)`,
-        });
-      }
       return update;
     }
   }
@@ -141,45 +90,24 @@ async function pollUntilComplete(
 /**
  * Executes a Komodo action and polls until the operation completes.
  *
- * Replaces the direct use of `komodo_client.execute_and_poll()` to add:
- * - Cancellation via AbortSignal (checked every poll iteration)
- * - Progress reporting to the MCP client
- * - Maximum timeout enforcement
- *
- * For instant operations (status already `Complete` after `execute()`),
- * the polling loop is skipped entirely.
+ * Replaces the direct use of `komodo_client.execute_and_poll()` to add
+ * maximum timeout enforcement on top of the underlying poll. For instant
+ * operations (status already `Complete` after `execute()`), the polling
+ * loop is skipped entirely.
  */
-export async function wrapExecuteAndPoll(
-  operation: string,
-  executeCall: () => Promise<Update>,
-  signal?: AbortSignal,
-  reportProgress?: ProgressReporter,
-): Promise<Update> {
-  checkCancelled(signal, operation);
-
+export async function wrapExecuteAndPoll(operation: string, executeCall: () => Promise<Update>): Promise<Update> {
   const client = requireClient();
 
-  try {
-    const update = await wrapApiCall(operation, executeCall, signal);
-    checkCancelled(signal, operation);
+  const update = await wrapApiCall(operation, executeCall);
 
-    // If already complete, skip polling
-    if (update.status === Types.UpdateStatus.Complete) {
-      return update;
-    }
-
-    // Poll until complete with cancellation + progress
-    const updateId = extractUpdateId(update);
-    return await pollUntilComplete(client, updateId, operation, signal, reportProgress);
-  } catch (error) {
-    checkCancelled(signal, operation);
-
-    if (OperationCancelledError.isCancellation(error)) {
-      throw new OperationCancelledError(operation);
-    }
-    // All other errors already wrapped by wrapApiCall
-    throw error;
+  // If already complete, skip polling
+  if (update.status === Types.UpdateStatus.Complete) {
+    return update;
   }
+
+  // Poll until complete
+  const updateId = extractUpdateId(update);
+  return await pollUntilComplete(client, updateId, operation);
 }
 
 // ============================================================================
@@ -208,7 +136,7 @@ export function buildActionResult(
   serverName?: string,
 ): ActionResult {
   const version = update.version
-    ? `${update.version.major}.${update.version.minor}.${update.version.patch}`
+    ? `${String(update.version.major)}.${String(update.version.minor)}.${String(update.version.patch)}`
     : undefined;
 
   return {

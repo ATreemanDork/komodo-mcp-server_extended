@@ -4,33 +4,26 @@
  * Zod schemas for server configuration including alerts, thresholds,
  * and maintenance windows.
  *
+ * Extends the initial proof-of-concept file (which exported only a trivial
+ * empty `serverListInputSchema`) to full parity with the reference repo's
+ * schemas (references/komodo-mcp-server/src/tools/schemas/server.ts) — `z`
+ * imported from `zod` directly rather than the reference's third-party
+ * framework re-export, which we don't depend on. `komodo_server_list`'s
+ * input is now the shared `paginationInputSchema` (see `./shared.ts`),
+ * matching the reference and every other list tool in this port, so the
+ * placeholder `serverListInputSchema` this file used to export is gone.
+ *
+ * `maintenanceWindowSchema` is reused from `./shared.ts` (already ported
+ * there for cross-domain reuse) rather than redeclared locally as the
+ * reference repo's own server.ts does — same fields, single source of truth.
+ *
  * @module tools/schemas/server
  */
 
-import { z } from "mcp-server-framework";
-import { Types } from "komodo_client";
+import { z } from "zod";
 import { ALERT_DESCRIPTIONS, THRESHOLD_DESCRIPTIONS, CONFIG_DESCRIPTIONS } from "../../config/index.js";
 import { serverIdSchema, resourceNameSchema } from "./validators.js";
-import { actionResultSchema, resourceLinkSchema, pageOutputSchema } from "./shared.js";
-
-/** Scheduled maintenance window for alert suppression */
-const maintenanceWindowSchema = z
-  .object({
-    name: z.string().describe("Name of the maintenance window"),
-    description: z.string().optional().describe("Description of what maintenance is performed"),
-    schedule_type: z
-      .nativeEnum(Types.MaintenanceScheduleType)
-      .optional()
-      .describe("Schedule type: Daily, Weekly, or OneTime"),
-    day_of_week: z.string().optional().describe("For Weekly schedules: day of the week"),
-    date: z.string().optional().describe("For OneTime: ISO 8601 date format (YYYY-MM-DD)"),
-    hour: z.number().int().min(0).max(23).optional().describe("Start hour in 24-hour format (0-23)"),
-    minute: z.number().int().min(0).max(59).optional().describe("Start minute (0-59)"),
-    duration_minutes: z.number().describe("Duration of the maintenance window in minutes"),
-    timezone: z.string().optional().describe("Timezone for maintenance window"),
-    enabled: z.boolean().describe("Whether this maintenance window is currently enabled"),
-  })
-  .describe("Scheduled maintenance window for alert suppression");
+import { actionResultSchema, resourceLinkSchema, pageOutputSchema, maintenanceWindowSchema } from "./shared.js";
 
 /** Server configuration — all fields optional (partial by design) */
 export const serverConfigSchema = z
@@ -64,12 +57,6 @@ export const serverConfigSchema = z
   })
   .describe("Configuration for a Komodo server");
 
-/**
- * Discriminated input for `komodo_server_apply` (create-or-update).
- *
- * - `action: "create"` — register a new Server (`name` required)
- * - `action: "update"` — PATCH-style update of an existing Server (`server` required)
- */
 /**
  * Input for `komodo_server_apply` (create-or-update).
  *
