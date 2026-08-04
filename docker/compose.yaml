@@ -1,24 +1,22 @@
-# Komodo MCP Server (extended) — build-it-yourself compose.
+# Komodo MCP Server (extended) — run the published image.
 #
-# No image is published to a public registry yet, so this builds the image
-# straight from the repo's Dockerfile. From a clone:
+# Standalone (no clone needed):
+#   mkdir komodo-mcp && cd komodo-mcp
+#   curl -O https://raw.githubusercontent.com/ATreemanDork/komodo-mcp-server_extended/main/docker/compose.yaml
+#   curl -O https://raw.githubusercontent.com/ATreemanDork/komodo-mcp-server_extended/main/.env.example
+#   cp .env.example .env      # fill in KOMODO_URL + credentials
+#   docker compose up -d
 #
-#   cp .env.example .env      # fill in KOMODO_URL / KOMODO_API_KEY / KOMODO_API_SECRET
-#   docker compose -f docker/compose.yaml up -d --build
-#
-# Once an image is published you can drop the `build:` block and uncomment the
-# `image:` line pointing at the registry.
+# To build from source instead of pulling, uncomment the `build:` block below
+# and run `docker compose up -d --build` from a clone.
 
 services:
   komodo-mcp-server:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-      target: production
-      args:
-        VERSION: ${KOMODO_MCP_VERSION:-dev}
-    image: komodo-mcp-server_extended:latest
-    # image: ghcr.io/atreemandork/komodo-mcp-server_extended:latest  # once published
+    image: ${KOMODO_MCP_IMAGE:-ghcr.io/atreemandork/komodo-mcp-server_extended}:${KOMODO_MCP_IMAGE_TAG:-latest}
+    # build:
+    #   context: ..
+    #   dockerfile: Dockerfile
+    #   target: production
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -35,10 +33,12 @@ services:
           memory: 128M
           cpus: '0.1'
 
-    ## Credentials + optional overrides come from the repo-root .env
-    ## (copy .env.example → .env). Never commit .env.
+    ## Credentials + optional overrides come from .env in this directory
+    ## (copy .env.example → .env). Optional — you can pass -e vars instead.
+    ## Never commit .env.
     env_file:
-      - ../.env
+      - path: .env
+        required: false
 
     environment:
       ## Timezone (RFC3339 / IANA), e.g. "UTC", "America/New_York"

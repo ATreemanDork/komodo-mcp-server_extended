@@ -51,19 +51,31 @@ Select with `MCP_TRANSPORT=stdio|http`.
 
 ## Quick start
 
-### Docker (build-it-yourself)
+### Docker (recommended)
 
-No public image is published yet, so build from source:
+Pull the published multi-arch image (amd64 / arm64 / arm) with compose:
 
 ```bash
-git clone https://github.com/ATreemanDork/komodo-mcp-server_extended.git
-cd komodo-mcp-server_extended
+mkdir komodo-mcp && cd komodo-mcp
+curl -O https://raw.githubusercontent.com/ATreemanDork/komodo-mcp-server_extended/main/docker/compose.yaml
+curl -O https://raw.githubusercontent.com/ATreemanDork/komodo-mcp-server_extended/main/.env.example
 cp .env.example .env          # fill in KOMODO_URL / KOMODO_API_KEY / KOMODO_API_SECRET
-docker compose -f docker/compose.yaml up -d --build
+docker compose up -d
+```
+
+Or a single container:
+
+```bash
+docker run -d -p 8000:8000 \
+  -e KOMODO_URL=https://komodo.example.com \
+  -e KOMODO_API_KEY=... -e KOMODO_API_SECRET=... \
+  ghcr.io/atreemandork/komodo-mcp-server_extended:latest
 ```
 
 The container defaults to HTTP transport on port 8000; check readiness with
-`curl localhost:8000/ready`.
+`curl localhost:8000/ready`. To build from source instead, clone the repo and
+`docker compose -f docker/compose.yaml up -d --build` (uncomment the `build:`
+block in `docker/compose.yaml`).
 
 ### Local (stdio, for Claude Desktop / editors)
 

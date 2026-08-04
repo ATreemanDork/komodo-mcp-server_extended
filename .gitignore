@@ -47,3 +47,10 @@ test-results/
 # TypeScript build info
 *.tsbuildinfo
 
+# Local agent/editor tooling — never commit to the public repo
+.recall/
+.claude/
+.zed/
+.cursor/
+.codebase-memory/
+

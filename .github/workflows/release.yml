@@ -131,23 +131,23 @@ jobs:
             type=semver,pattern={{major}},value=${{ needs.check-version.outputs.current_version }}
             type=raw,value=latest,enable=${{ needs.check-version.outputs.is_prerelease == 'false' }}
           labels: |
-            org.opencontainers.image.title=Komodo MCP Server
-            org.opencontainers.image.description=Model Context Protocol server for Komodo Container Manager
+            org.opencontainers.image.title=Komodo MCP Server (extended)
+            org.opencontainers.image.description=Model Context Protocol server for the Komodo container-orchestration API (extended fork)
             org.opencontainers.image.version=${{ needs.check-version.outputs.current_version }}
-            org.opencontainers.image.vendor=MP-Tool
+            org.opencontainers.image.vendor=ATreemanDork
             org.opencontainers.image.licenses=GPL-3.0
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#readme
-            io.modelcontextprotocol.server.name=io.github.MP-Tool/komodo-mcp-server
+            io.modelcontextprotocol.server.name=io.github.ATreemanDork/komodo-mcp-server_extended
           annotations: |
-            org.opencontainers.image.title=Komodo MCP Server
-            org.opencontainers.image.description=Model Context Protocol server for Komodo Container Manager
+            org.opencontainers.image.title=Komodo MCP Server (extended)
+            org.opencontainers.image.description=Model Context Protocol server for the Komodo container-orchestration API (extended fork)
             org.opencontainers.image.version=${{ needs.check-version.outputs.current_version }}
-            org.opencontainers.image.vendor=MP-Tool
+            org.opencontainers.image.vendor=ATreemanDork
             org.opencontainers.image.licenses=GPL-3.0
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#readme
-            io.modelcontextprotocol.server.name=io.github.MP-Tool/komodo-mcp-server
+            io.modelcontextprotocol.server.name=io.github.ATreemanDork/komodo-mcp-server_extended
 
       - name: Build and push Docker image
         id: build
@@ -212,8 +212,8 @@ jobs:
           
           # Rename to version-based filename for release asset
           # Note: gh outputs filename with colon (sha256:<hash>.jsonl)
-          mv "${DIGEST}.jsonl" "komodo-mcp-server-${VERSION}.intoto.jsonl"
-          echo "✅ Attestation exported: komodo-mcp-server-${VERSION}.intoto.jsonl"
+          mv "${DIGEST}.jsonl" "komodo-mcp-server_extended-${VERSION}.intoto.jsonl"
+          echo "✅ Attestation exported: komodo-mcp-server_extended-${VERSION}.intoto.jsonl"
 
       - name: Generate release notes
         id: release_notes
@@ -273,7 +273,7 @@ jobs:
           prerelease: ${{ needs.check-version.outputs.is_prerelease == 'true' }}
           # Attach SLSA provenance attestation for OpenSSF Scorecard "Signed-Releases" check
           files: |
-            komodo-mcp-server-${{ needs.check-version.outputs.current_version }}.intoto.jsonl
+            komodo-mcp-server_extended-${{ needs.check-version.outputs.current_version }}.intoto.jsonl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -283,8 +283,6 @@ jobs:
     timeout-minutes: 5
     needs: [check-version, build-and-push]
     if: needs.check-version.outputs.should_build == 'true'
-    permissions:
-      actions: write       # Required for triggering publish-npm.yml via `gh workflow run`
     steps:
       - name: Summary
         env:
@@ -303,27 +301,3 @@ jobs:
           
           [View Release](https://github.com/${{ github.repository }}/releases/tag/${VERSION}) · [Docker Image](https://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }})
           EOF
-
-      # Trigger the npm publish workflow as a fresh top-level run.
-      #
-      # Why a separate dispatch instead of a reusable workflow (`uses:`)?
-      # npm Trusted Publishing matches the OIDC `workflow_ref` claim against the
-      # registered workflow filename. With a reusable workflow, `workflow_ref`
-      # points to the *caller* (release.yml), and npm only allows a single
-      # Trusted Publisher per package, which must point at publish-npm.yml.
-      # `gh workflow run publish-npm.yml` starts a top-level run whose
-      # workflow_ref matches the registered TP, allowing `npm publish` to
-      # authenticate via OIDC.
-      #
-      # Why not rely on the `release: [published]` trigger?
-      # When a release is created by the same workflow run, GitHub does not
-      # always re-fire the `release` event reliably, so we trigger explicitly.
-      - name: Trigger npm publish workflow
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "🚀 Triggering npm publish workflow..."
-          gh workflow run publish-npm.yml \
-            --repo ${{ github.repository }} \
-            --ref main
-          echo "✅ npm publish workflow triggered"
