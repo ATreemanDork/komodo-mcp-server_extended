@@ -203,12 +203,27 @@ describe("defineTool — dynamic guardrail classifier (per-action tiering)", () 
     return { tool, handler };
   }
 
-  it("a safe action classified as no tier runs immediately, ignoring dry_run", async () => {
+  it("a safe action runs frictionlessly when dry_run is omitted", async () => {
     const { tool, handler } = makeActionTool();
     const result = await tool.handler({ action: "start" }, extra);
     expect(handler).toHaveBeenCalledTimes(1);
     expect(result.isError).toBeFalsy();
     expect((result.content?.[0] as { text: string }).text).toBe("ran start");
+  });
+
+  it("a safe action runs when dry_run is explicitly false", async () => {
+    const { tool, handler } = makeActionTool();
+    const result = await tool.handler({ action: "start", dry_run: false }, extra);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("a safe action with dry_run: true previews WITHOUT executing (no silent run)", async () => {
+    const { tool, handler } = makeActionTool();
+    const result = await tool.handler({ action: "start", dry_run: true }, extra);
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect((result.content?.[0] as { text: string }).text).toMatch(/did NOT run/i);
   });
 
   it("a destructive action requires the dry-run/confirm dance", async () => {

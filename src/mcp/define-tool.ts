@@ -73,16 +73,18 @@ const guardrailFieldsShape = {
     .boolean()
     .optional()
     .describe(
-      "Guardrail: defaults to true. Leave unset or true for a safe preview that returns a `confirm` token " +
-        "instead of running — nothing destructive happens. Pass false, together with that exact token and the " +
-        "exact same other arguments, to actually execute.",
+      "Guardrail preview toggle. `dry_run: true` NEVER executes — it always previews. " +
+        "Destructive/critical operations (deletes, `destroy`, permission/privilege changes) ALSO preview when " +
+        "dry_run is omitted, and return a `confirm` token; re-call with `dry_run: false` plus that exact token " +
+        "and identical other arguments to execute. Non-destructive operations run when dry_run is omitted or " +
+        "false (no token needed) — pass `dry_run: true` only to preview them without running.",
     ),
   confirm: z
     .string()
     .optional()
     .describe(
-      "Guardrail: the `confirm` token returned by a prior call to this same tool with matching arguments. " +
-        "Required when dry_run is false.",
+      "Guardrail: the `confirm` token returned by a prior preview of this same tool with matching arguments. " +
+        "Required to execute a destructive/critical operation (`dry_run: false`); not needed for non-destructive operations.",
     ),
 };
 
@@ -168,6 +170,20 @@ export function defineTool<Input extends AnyZodObject>(config: ToolDefinitionCon
     const tier = typeof guardrail === "function" ? guardrail(realArgs) : guardrail;
 
     if (!tier) {
+      // Non-gated action on a guarded tool (e.g. `deploy`/`start` on a
+      // `*_action` tool whose only gated action is `destroy`). Honor an
+      // EXPLICIT `dry_run: true` as a no-op preview — never execute — so the
+      // schema's "dry_run: true never runs" promise holds for every action.
+      // Omitted or `dry_run: false` still runs frictionlessly: non-destructive
+      // actions carry no confirm-token requirement.
+      if (dry_run === true) {
+        return errorResult(
+          `🔍 Dry run — this call did NOT run. \`${toolName}\` with these arguments is not a ` +
+            "destructive/gated action, so no confirm token is needed. Call again with " +
+            "`dry_run: false` (or omit dry_run) to execute.\n\n" +
+            `Arguments: ${JSON.stringify(redactObject(realArgs), null, 2)}`,
+        );
+      }
       return config.handler(realArgs, extra);
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "komodo-mcp-server_extended",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Comprehensive Model Context Protocol server for the Komodo container-orchestration API",
   "type": "module",
   "main": "build/index.js",
